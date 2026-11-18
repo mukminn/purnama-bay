@@ -6,6 +6,7 @@ import * as THREE from 'three';
 import { S, CFG, dist2d, pushOut, pushOutCars, clamp } from './config.js';
 import { makePerson, animatePerson } from './characters.js';
 import { W } from './wanted.js';
+import { sfx } from './audio.js';
 
 function spawnUnit(scene, x, z) {
   const group = makePerson({ shirt: 0x22355e, pants: 0x1a2436, cap: 0x22355e });
@@ -16,6 +17,7 @@ function spawnUnit(scene, x, z) {
     heading: 0, speed: 6.2, status: 'pursue',
     animPhase: Math.random() * 6, animSpeed: 0,
     state: 'pursue', baseScale: 1, crouchVisual: false,
+    shotCd: 1.4 + Math.random() * 1.4, aimPose: false,
   };
   S.policeUnits.push(unit);
   return unit;
@@ -54,7 +56,20 @@ export function updatePolice(scene, dt) {
     const tx = u.status === 'pursue' ? p.x : W.lastSeenX;
     const tz = u.status === 'pursue' ? p.z : W.lastSeenZ;
     const targetSpeed = u.status === 'pursue' ? 6.2 : 4.2;
-    if (dist2d(u.x, u.z, tx, tz) > 1.25) {
+    if (W.stars >= 3 && !S.inCar && u.status === 'pursue' && d <= 17 && d >= 5.5) {
+      // at 3+ stars a unit in mid-range stops and shoots instead of closing in
+      u.animSpeed = 0;
+      u.heading = Math.atan2(p.x - u.x, p.z - u.z);
+      u.aimPose = true;
+      u.shotCd -= dt;
+      if (u.shotCd <= 0) {
+        u.shotCd = 2.6;
+        sfx.shot();
+        S.health -= CFG.bulletDamage;
+        S.combat.fightT = CFG.fightModeTime;
+      }
+    } else if (dist2d(u.x, u.z, tx, tz) > 1.25) {
+      u.aimPose = false;
       const wantHeading = Math.atan2(tx - u.x, tz - u.z);
       let diff = wantHeading - u.heading;
       while (diff > Math.PI) diff -= Math.PI * 2;
@@ -65,6 +80,7 @@ export function updatePolice(scene, dt) {
       u.z += Math.cos(u.heading) * step;
       u.animSpeed = targetSpeed;
     } else {
+      u.aimPose = false;
       u.animSpeed = 0;
       u.heading = Math.atan2(p.x - u.x, p.z - u.z);
     }

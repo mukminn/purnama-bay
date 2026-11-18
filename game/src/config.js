@@ -26,6 +26,7 @@ export const CFG = {
   // shop prices (PB$)
   priceBaton: 250,
   pricePistol: 900,
+  priceKnife: 400,
   priceAmmo: 60,
   ammoPack: 12,
   // mission rewards (PB$) - the ONLY source of money in the game
@@ -38,10 +39,12 @@ export const CFG = {
   miraSpot: { x: 10, z: 31 },
   worldHalf: 148,
   // combat
-  punchDamage: 12,
-  kickDamage: 16,
-  batonDamage: 20,
-  bulletDamage: 34,
+  punchDamage: 10,
+  kickDamage: 10,
+  batonDamage: 20, // the baton IS now a baseball bat
+  knifeDamage: 15,
+  bulletDamage: 30,
+  fightModeTime: 5, // seconds the fight mode (pose + HP bars) stays up
   attackRange: 2.3,
   attackCooldown: 0.35,
   attackWindow: 0.7,       // how long an attack reads as "active" (attackT)
@@ -96,6 +99,7 @@ export const S = {
   combat: {
     attackT: 0, attackKind: '', attackCd: 0,
     lastKind: '', lastAt: -10,
+    fightT: 0,
   },
   // genre-style feedback counters: hit-marker flashes for the player's own
   // landed attacks, red vignette flashes when the player takes damage

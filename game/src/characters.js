@@ -60,14 +60,17 @@ export function makePerson(opts = {}) {
   const coreParts = [
     // pelvis: a squashed sphere in trouser colour, not a box
     { geo: new THREE.SphereGeometry(0.19, 10, 8), color: pants, y: 0.95, sx: 1.05, sy: 0.62, sz: 0.72 },
-    { geo: new THREE.SphereGeometry(0.145, 10, 8), color: skin, y: 1.70, sx: 0.92, sy: 1.08, sz: 0.98 },
-    { geo: new THREE.SphereGeometry(0.152, 10, 6, 0, Math.PI * 2, 0, Math.PI * 0.52), color: 0x241a12, y: 1.725, z: -0.012, sx: 0.94, sy: 1.02, sz: 1.0 },
+    { geo: new THREE.SphereGeometry(0.105, 10, 8), color: skin, y: 1.655, sx: 0.92, sy: 1.05, sz: 0.98 },
+    { geo: new THREE.SphereGeometry(0.112, 10, 6, 0, Math.PI * 2, 0, Math.PI * 0.52), color: 0x241a12, y: 1.68, z: -0.012, sx: 0.94, sy: 1.02, sz: 1.0 },
+    // implied eyes on the front of the head
+    { geo: new THREE.SphereGeometry(0.012, 6, 5), color: 0x191008, x: -0.038, y: 1.68, z: 0.096 },
+    { geo: new THREE.SphereGeometry(0.012, 6, 5), color: 0x191008, x: 0.038, y: 1.68, z: 0.096 },
     // neck between torso and head
-    { geo: new THREE.CylinderGeometry(0.05, 0.05, 0.09, 8), color: skin, y: 1.60 },
+    { geo: new THREE.CylinderGeometry(0.05, 0.05, 0.11, 8), color: skin, y: 1.545 },
   ];
   if (opts.cap) {
     coreParts.push({ geo: new THREE.SphereGeometry(0.155, 10, 5, 0, Math.PI * 2, 0, Math.PI * 0.45), color: opts.cap, y: 1.735, sx: 0.95, sy: 0.8, sz: 1.0 });
-    coreParts.push({ geo: new THREE.BoxGeometry(0.24, 0.03, 0.16), color: opts.cap, y: 1.76, z: 0.17 });
+    coreParts.push({ geo: new THREE.BoxGeometry(0.24, 0.03, 0.16), color: opts.cap, y: 1.715, z: 0.17 });
   }
   if (opts.skirt) {
     coreParts.push({ geo: new THREE.CylinderGeometry(0.175, 0.26, 0.36, 9, 1, true), color: pants, y: 0.76, sz: 0.72 });
@@ -76,13 +79,13 @@ export function makePerson(opts = {}) {
   // camera / travel direction; everyone else keeps the merged head.
   let core; let headMesh = null;
   if (opts.headSeparate) {
-    const headParts = coreParts.splice(1, 2); // head sphere + hair cap
+    const headParts = coreParts.splice(1, 4); // head sphere + hair cap + both eyes
     core = new THREE.Mesh(mergeColored(coreParts), coloredStandard);
     headMesh = new THREE.Mesh(mergeColored(headParts), coloredStandard);
     headMesh.castShadow = true;
-    // head geometry is authored around y=1.70; re-pivot it at the neck
-    headMesh.geometry.translate(0, -1.70, 0);
-    headMesh.position.set(0, 1.70, 0);
+    // head geometry is authored around y=1.66; re-pivot it at the neck
+    headMesh.geometry.translate(0, -1.655, 0);
+    headMesh.position.set(0, 1.655, 0);
     g.add(headMesh);
   } else {
     core = new THREE.Mesh(mergeColored(coreParts), coloredStandard);
@@ -90,7 +93,7 @@ export function makePerson(opts = {}) {
   core.castShadow = true;
   // torso: chest wider than waist, flattened front-to-back. Its geometry
   // is re-pivoted at the waist so it can lean and sway as its own joint.
-  const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.185, 0.145, 0.58, 12), shirtMat);
+  const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.20, 0.145, 0.58, 12), shirtMat);
   torso.geometry.translate(0, 0.29, 0);
   torso.position.set(0, 0.95, 0);
   torso.scale.z = 0.62;
@@ -195,6 +198,30 @@ export function animatePerson(rec, dt) {
     T.foreR = 0.55 + Math.cos(gph * 0.83) * 0.14;
   }
   if (rec.crouchVisual) { T.torsoX = 0.30; T.legL = 0.5; T.legR = -0.35; T.shinL = 0.9; T.shinR = 0.7; }
+  // combat poses, lowest priority first so the later ones win:
+  // hostile guard < aim < fight pose < swing (down beats them all)
+  if (!down && rec.state === 'hostile') {
+    T.armL = -0.5; T.foreL = 1.5;
+  }
+  if (!down && rec.aimPose) {
+    T.armR = -1.35; T.foreR = 0.05;
+  }
+  if (!down && rec.fightPose) {
+    rec.guardPhase = (rec.guardPhase || 0) + dt * 7;
+    T.armL = -0.62; T.armR = -0.62;
+    T.foreL = 1.85; T.foreR = 1.85;
+    T.torsoX = 0.14 + Math.sin(rec.guardPhase) * 0.03;
+    T.legL = 0.22; T.legR = -0.18;
+    T.shinL = 0.35; T.shinR = 0.30;
+    T.torsoZ = Math.sin(rec.guardPhase) * 0.03;
+  }
+  if (!down && rec.swingT > 0) {
+    if (rec.swingKind === 'kick') {
+      T.legR = -1.15; T.shinR = 0.25;
+    } else {
+      T.armR = -1.5; T.foreR = 0.08;
+    }
+  }
   // the player's head looks toward the camera heading when one is given
   // (headTargetYaw is the desired head yaw relative to the body)
   if (parts.headMesh && typeof rec.headTargetYaw === 'number') {
@@ -256,8 +283,89 @@ export function makePersonRecord(kind, group, x, z) {
     gestureSeed: Math.random() * 6.28,
     socialT: 0, socialPartner: null,
   };
-  if (kind !== 'child') rec.health = kind === 'thug' ? 36 : 30;
+  if (kind !== 'child') rec.health = 100;
   return rec;
+}
+
+// Overhead HP bar: a small canvas sprite that only redraws when the
+// fraction or its visibility actually changes.
+export function createBar(group) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 96; canvas.height = 12;
+  const ctx = canvas.getContext('2d');
+  const tex = new THREE.CanvasTexture(canvas);
+  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false });
+  const sprite = new THREE.Sprite(mat);
+  sprite.scale.set(1.15, 0.145, 1);
+  sprite.position.set(0, 2.05, 0);
+  sprite.visible = false;
+  group.add(sprite);
+  let lastFrac = -1;
+  let lastVisible = false;
+  function barColor(frac) {
+    const green = [0x57, 0xc2, 0x56]; const yellow = [0xe8, 0xc8, 0x32]; const red = [0xd9, 0x4f, 0x3d];
+    let a; let b; let t;
+    if (frac > 0.5) { a = yellow; b = green; t = (frac - 0.5) * 2; }
+    else { a = red; b = yellow; t = frac * 2; }
+    const r = Math.round(a[0] + (b[0] - a[0]) * t);
+    const g = Math.round(a[1] + (b[1] - a[1]) * t);
+    const bl = Math.round(a[2] + (b[2] - a[2]) * t);
+    return `rgb(${r},${g},${bl})`;
+  }
+  return {
+    sprite,
+    set(frac, visible) {
+      const f = Math.max(0, Math.min(1, frac));
+      if (Math.abs(f - lastFrac) <= 0.005 && visible === lastVisible) return;
+      lastFrac = f; lastVisible = visible;
+      sprite.visible = visible;
+      ctx.clearRect(0, 0, 96, 12);
+      ctx.fillStyle = 'rgba(10,10,14,0.72)';
+      ctx.fillRect(0, 0, 96, 12);
+      ctx.strokeStyle = 'rgba(10,10,14,0.72)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(0.5, 0.5, 95, 11);
+      ctx.fillStyle = barColor(f);
+      ctx.fillRect(2, 2, f * (96 - 4), 12 - 4);
+      tex.needsUpdate = true;
+    },
+  };
+}
+
+// A small hand-held weapon prop (bat / knife / pistol) for the right hand.
+export function makeWeaponProp(kind) {
+  if (kind === 'baton') {
+    const geo = new THREE.CylinderGeometry(0.026, 0.034, 0.72, 8);
+    geo.translate(0, -0.30, 0);
+    const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: 0x9a6a38, roughness: 0.8, metalness: 0 }));
+    m.castShadow = false;
+    return m;
+  }
+  if (kind === 'knife') {
+    const g = new THREE.Group();
+    const handle = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.11, 0.045),
+      new THREE.MeshStandardMaterial({ color: 0x2a2d33, roughness: 0.7, metalness: 0.1 }));
+    handle.position.set(0, -0.055, 0);
+    handle.castShadow = false;
+    const blade = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.17, 0.05),
+      new THREE.MeshStandardMaterial({ color: 0xc8ccd4, roughness: 0.35, metalness: 0.7 }));
+    blade.position.set(0, -0.195, 0);
+    blade.castShadow = false;
+    g.add(handle, blade);
+    return g;
+  }
+  // pistol
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.12, 0.20),
+    new THREE.MeshStandardMaterial({ color: 0x17191d, roughness: 0.5, metalness: 0.4 }));
+  body.position.set(0, -0.06, 0);
+  body.castShadow = false;
+  const barrel = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.045, 0.12),
+    new THREE.MeshStandardMaterial({ color: 0x17191d, roughness: 0.5, metalness: 0.4 }));
+  barrel.position.set(0, -0.02, 0.14);
+  barrel.castShadow = false;
+  g.add(body, barrel);
+  return g;
 }
 
 // A small quadruped: body, head, ears, tail - dogs and cats of the bay,

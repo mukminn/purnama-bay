@@ -6,14 +6,14 @@ import * as THREE from 'three';
 import { CFG, S, clamp, angleLerp, pushOut, pushOutCars, dist2d } from './config.js';
 import { buildWorld, PLACES, updateDayNight, setPhase, phaseInfo, WORLD_COUNTS, ROAD_LINES, PARK, groundYAt, bindScene, WX, setWeather, updateWeather, weatherRoadInfo, lightState, setLightAxis, lightForcedAxis, updateTrafficLights } from './world.js';
 import { buildPopulation, updatePopulation, countsSnapshot, nearestNPC, scareArea, pedPositions } from './population.js';
-import { makePerson, animatePerson } from './characters.js';
+import { makePerson, animatePerson, createBar, makeWeaponProp } from './characters.js';
 import { buildVehicles, nearestEnterableCar, driveStep, updateTraffic, enterCar, exitCar, syncCarMesh, updateVehicleFx, carInfo } from './vehicles.js';
 import { W, wantedSnapshot, updateWanted, noteVehicleSwap, noteClothesChange, clearWanted, reportCrime } from './wanted.js';
 import { updatePolice, policeDebug, nearestPoliceDist } from './police.js';
 import { WPN, weaponsSnapshot, selectWeapon, buyItem, meleeAttack, punchNearest, shoot, initDrops, updateDrops, dropsInfo, pickupDropAt, flushBufferedAttack } from './weapons.js';
 import { MISSIONS, M, startMission, updateMissions, missionSnapshot, missionsInit, setStealCar, stageFinaleCrime } from './missions.js';
 import { initHUD, setObjective, showBanner, showDialog, hideDialog, setPrompt, openShop, closeShop, refreshShop, updateHUD, setMinimapTarget, showDamage, hudInfo, toastInfo, openMap, closeMap, isMapOpen, mapInfo } from './hud.js';
-import { initTouch, refreshTouchVisibility } from './touch.js';
+import { initTouch, refreshTouchVisibility, isTouchCapable } from './touch.js';
 import { audioInit, sfx, sirenUpdate, audioToggleMute, audioInfo } from './audio.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.min.js';
 
@@ -79,6 +79,16 @@ const playerAnim = {
   baseScale: playerGroup.userData.baseScaleY ?? 1, crouchVisual: false,
 };
 
+// the player's own hand-held weapon props, shown only while equipped
+const playerProps = { baton: makeWeaponProp('baton'), knife: makeWeaponProp('knife'), pistol: makeWeaponProp('pistol') };
+for (const prop of Object.values(playerProps)) {
+  prop.position.set(0, -0.62, 0.12);
+  prop.visible = false;
+  playerGroup.userData.parts.armR.add(prop);
+}
+// the player's overhead HP bar, visible while fight mode is up
+const playerBar = createBar(playerGroup);
+
 // a soft disc marker that floats over the current mission target
 const marker = new THREE.Mesh(
   new THREE.CylinderGeometry(1.6, 1.6, 14, 20, 1, true),
@@ -96,13 +106,25 @@ initHUD({
   onMap: () => toggleMapGame(),
 });
 
+// device mode: touch hardware plays the HP layout, everything else PC.
+// The module runs after the body is parsed, so the menu elements exist.
+const DEVICE_MODE = isTouchCapable() ? 'HP' : 'PC';
+{
+  const tag = document.getElementById('mode-tag');
+  if (tag) tag.textContent = DEVICE_MODE === 'PC' ? 'MODE: PC — keyboard & mouse' : 'MODE: HP — touch controls';
+  if (DEVICE_MODE === 'HP') {
+    const controls = document.getElementById('menu-controls');
+    if (controls) controls.textContent = 'Left stick move · drag right side for camera · HIT fight · ACT interact / enter car · JUMP · MAP full map · CAM first-person';
+  }
+}
+
 // ---------------------------------------------------------------- run state
 function resetRun() {
   S.money = 0;
   S.health = 100;
   S.time = 0;
   clearWanted();
-  WPN.owned = { fists: true, baton: false, pistol: false };
+  WPN.owned = { fists: true, baton: false, pistol: false, knife: false };
   WPN.active = 'fists';
   WPN.ammo = 0;
   if (S.inCar) exitCar();
@@ -132,7 +154,7 @@ function loadGame() {
     const d = JSON.parse(raw);
     S.money = d.money || 0;
     S.health = d.health || 100;
-    WPN.owned = { fists: true, baton: !!d.owned?.baton, pistol: !!d.owned?.pistol };
+    WPN.owned = { fists: true, baton: !!d.owned?.baton, pistol: !!d.owned?.pistol, knife: !!d.owned?.knife };
     WPN.ammo = d.ammo || 0;
     WPN.active = WPN.owned[d.active] ? d.active : 'fists';
     S.p.x = typeof d.x === 'number' ? d.x : 0;
@@ -273,6 +295,7 @@ window.addEventListener('keydown', (e) => {
     case 'Digit1': selectWeapon('baton'); break;
     case 'Digit2': selectWeapon('pistol'); break;
     case 'Digit3': selectWeapon('fists'); break;
+    case 'Digit4': selectWeapon('knife'); break;
     case 'KeyM': toggleMapGame(); break;
     case 'KeyN': audioToggleMute(); break;
     case 'KeyV': if (S.mode === 'playing') toggleCamMode(); break;
@@ -326,6 +349,9 @@ if (hasSave()) document.getElementById('btn-continue').style.display = 'inline-b
 function updatePlayer(dt) {
   const p = S.p;
   const keys = S.input.keys;
+  playerProps.baton.visible = WPN.active === 'baton' && !S.inCar;
+  playerProps.knife.visible = WPN.active === 'knife' && !S.inCar;
+  playerProps.pistol.visible = WPN.active === 'pistol' && !S.inCar;
   if (S.inCar && S.currentCar) {
     const car = S.currentCar;
     let throttle = 0; let steer = 0;
@@ -416,6 +442,9 @@ function updatePlayer(dt) {
   playerGroup.rotation.y = p.heading;
   playerAnim.animSpeed = p.vel;
   playerAnim.crouchVisual = p.crouch;
+  playerAnim.fightPose = S.combat.fightT > 0 && !S.inCar;
+  playerAnim.swingT = S.combat.attackT;
+  playerAnim.swingKind = S.combat.attackKind;
   // the head turns toward the camera's view direction, relative to the
   // body - looking where you are steering the camera, genre-style
   playerAnim.headTargetYaw = camYaw - p.heading;
@@ -531,6 +560,7 @@ function stateSnapshot() {
     combat: {
       attackT: S.combat.attackT, attackKind: S.combat.attackKind,
       attackCd: S.combat.attackCd, lastKind: S.combat.lastKind, lastAt: S.combat.lastAt,
+      fightT: +S.combat.fightT.toFixed(2), fightMode: S.combat.fightT > 0,
     },
     vehicle: S.currentCar ? { model: S.currentCar.model, heading: S.currentCar.heading, speed: S.currentCar.speed, health: S.currentCar.health, hardHits: S.currentCar.hardHits, exploded: S.currentCar.exploded } : null,
     feedback: { hits: S.feedback.hits, flashes: S.feedback.flashes },
@@ -593,9 +623,14 @@ window.PB = {
     return { kind: rec.kind, x: rec.x, z: rec.z };
   },
   npcInfo: (kind) => S.npcs.filter((n) => n.kind === kind).map((n) => ({
+    id: S.npcs.indexOf(n),
     kind: n.kind, state: n.state, x: Math.round(n.x * 10) / 10, z: Math.round(n.z * 10) / 10,
     hasHealth: 'health' in n, health: 'health' in n ? n.health : null,
+    weapon: n.weapon || null, bar: !!(n.barT > 0),
   })),
+  modeInfo: () => ({ device: DEVICE_MODE, touchVisible: document.getElementById('touch-ui').style.display === 'block', tag: document.getElementById('mode-tag')?.textContent || '' }),
+  combatInfo: () => ({ cfg: { punch: CFG.punchDamage, kick: CFG.kickDamage, knife: CFG.knifeDamage, bat: CFG.batonDamage, bullet: CFG.bulletDamage, maxHealth: 100 }, player: { health: S.health, fightMode: S.combat.fightT > 0, fightT: +S.combat.fightT.toFixed(2) }, npcs: S.npcs.filter((n) => n.kind !== 'animal').map((n) => ({ id: S.npcs.indexOf(n), kind: n.kind, weapon: n.weapon || null, hasHealth: 'health' in n, health: 'health' in n ? n.health : null, state: n.state, bar: !!(n.barT > 0), x: Math.round(n.x * 10) / 10, z: Math.round(n.z * 10) / 10 })) }),
+  bodyMetrics: () => { const bb = new THREE.Box3(); playerGroup.traverse((o) => { if (o.isMesh) bb.union(new THREE.Box3().setFromObject(o)); }); const head = playerGroup.userData.parts.headMesh; const hb = head ? new THREE.Box3().setFromObject(head) : bb; return { height: +(bb.max.y - bb.min.y).toFixed(3), headHeight: +(hb.max.y - hb.min.y).toFixed(3), ratio: +((bb.max.y - bb.min.y) / (hb.max.y - hb.min.y)).toFixed(2) }; },
   counts: countsSnapshot,
   debugCars: () => ({
     parked: S.cars.filter((c) => !c.traffic).map((c) => ({ x: c.x, z: c.z, model: c.model, heading: c.heading, len: c.len, wid: c.wid })),
@@ -786,6 +821,14 @@ function setupShot(name) {
     S.p.x = 7.2; S.p.z = 66.8;
     S.p.heading = Math.atan2(car.x - S.p.x, car.z - S.p.z);
     camYaw = S.p.heading;
+  } else if (name === 'fight') {
+    if (S.inCar) exitCar();
+    S.p.x = 8; S.p.z = 44; S.p.heading = 0.6; camYaw = 0.6;
+    window.PB.spawnWitnessCrime();
+    S.combat.fightT = 5;
+  } else if (name === 'hero') {
+    if (S.inCar) exitCar();
+    S.p.x = 8; S.p.z = 44; S.p.heading = -0.7; camYaw = -0.7;
   } else if (name === 'crowd') {
     if (S.inCar) exitCar();
     S.p.x = 0; S.p.z = 30; S.p.heading = Math.PI; camYaw = Math.PI;
@@ -850,6 +893,7 @@ function loop() {
       S.time += sdt;
       if (S.combat.attackT > 0) S.combat.attackT = Math.max(0, S.combat.attackT - sdt);
       if (S.combat.attackCd > 0) S.combat.attackCd = Math.max(0, S.combat.attackCd - sdt);
+      if (S.combat.fightT > 0) S.combat.fightT = Math.max(0, S.combat.fightT - sdt);
       flushBufferedAttack();
       updatePlayer(sdt);
       updateTraffic(sdt);
@@ -873,6 +917,7 @@ function loop() {
       if (S.mode !== 'playing') break;
     }
     checkDamageFeedback();
+    playerBar.set(S.health / 100, S.combat.fightT > 0 && !S.inCar);
     updateVehicleFx(dt);
     updateWeather(dt);
     updateTrafficLights(dt);

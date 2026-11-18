@@ -3,7 +3,7 @@
 // and the bay's dogs and cats. Counts are the game's census targets.
 import * as THREE from 'three';
 import { S, CFG, dist2d, pushOut, pushOutCars, clamp } from './config.js';
-import { makePerson, makePersonRecord, makeAnimal, animatePerson, animateAnimal, attachProp } from './characters.js';
+import { makePerson, makePersonRecord, makeAnimal, animatePerson, animateAnimal, attachProp, makeWeaponProp, createBar } from './characters.js';
 import { PLACES, ROAD_LINES, SIDEWALK_OFFSET, isRoad, isSidewalk, inPark, PARK, groundYAt, WX } from './world.js';
 import { reportCrime } from './wanted.js';
 import { sfx } from './audio.js';
@@ -157,12 +157,15 @@ export function buildPopulation(scene) {
     addPerson(scene, 'child', x, z, { scale: i % 2 ? 0.66 : 0.58, skirt: i % 2 === 0 });
   }
   // syndicate thugs loiter ON pavements near the warehouse and the
-  // docks; two are armed
+  // docks; each carries the weapon listed for his index
   const thugSpots = [[87.35, -52], [87.35, -74], [-24, 87.35], [72.65, -52], [-30, 100]];
+  const thugWeapons = ['pistol', 'baton', 'pistol', 'knife', null];
   thugSpots.forEach(([x, z], i) => {
     const rec = addPerson(scene, 'thug', x, z, { shirt: 0x23272c, pants: 0x17191c, cap: 0x101214, build: i % 2 ? 'tall' : 'broad' });
-    rec.armed = i % 2 === 0;
+    rec.weapon = thugWeapons[i];
+    rec.armed = !!rec.weapon;
     rec.homeX = x; rec.homeZ = z;
+    if (rec.weapon) attachProp(rec, makeWeaponProp(rec.weapon));
   });
   for (let i = 0; i < CENSUS.animal; i++) {
     const [x, z] = scatter(WANDER_HALF, hideCorner);
@@ -247,8 +250,12 @@ export function damageNPC(rec, dmg) {
     rec.animSpeed = 0;
     return 'down';
   }
-  if (rec.kind === 'thug') { rec.state = 'hostile'; rec.hostileT = 14; }
-  else { rec.state = 'flee'; rec.fleeT = 4; }
+  // every surviving adult human fights back now, whatever their job
+  if (rec.state === 'stand' && rec.homeState === undefined) rec.homeState = 'stand';
+  rec.state = 'hostile';
+  rec.hostileT = 14;
+  rec.barT = 5;
+  rec.fightPose = true;
   return 'hurt';
 }
 
@@ -323,12 +330,26 @@ export function updatePopulation(dt) {
       n.downT -= dt;
       if (n.downT <= 0 && n.kind !== 'child') {
         n.state = 'wander';
-        if ('health' in n) n.health = Math.max(10, n.health);
+        if ('health' in n) n.health = 100;
       }
       syncMesh(n); continue;
     }
     if (n.kind !== 'animal') checkCarHits(n);
     if (n.state === 'dead') { syncMesh(n); continue; }
+    if (n.swingT > 0) n.swingT -= dt;
+    // HP bar + fight pose for every adult human, refreshed each frame
+    // before animatePerson runs below
+    if (n.kind !== 'animal' && n.kind !== 'child') {
+      if (n.barT > 0) {
+        n.barT -= dt;
+        if (!n.bar) n.bar = createBar(n.group);
+        n.bar.set(n.health / 100, true);
+      } else if (n.bar) {
+        n.bar.set(n.health / 100, false);
+      }
+      n.fightPose = (n.state === 'hostile' || n.state === 'attack');
+    }
+    if (n.closeT && n.state !== 'hostile' && n.state !== 'attack') n.closeT = 0; // pinned-at-close-range timer only lives in a fight
     if (n.armPose && n.state !== 'stand') n.armPose = null; // W5: pose drops when life interrupts
     if (n.state === 'stand') {
       n.animSpeed = 0;
@@ -363,20 +384,72 @@ export function updatePopulation(dt) {
       steer(n, n.x + Math.sin(away) * 12, n.z + Math.cos(away) * 12, n.kind === 'child' ? 3.4 : 4.4, dt);
       if (n.fleeT <= 0) n.state = 'wander';
     } else if (n.state === 'hostile' || n.state === 'attack') {
-      // thugs close on the player and swing; they give up after hostileT
+      // fighters close on the player and strike; they give up after hostileT
       n.hostileT -= dt;
       const d = dist2d(n.x, n.z, p.x, p.z);
-      if (n.hostileT <= 0 || S.inCar) { n.state = 'wander'; }
-      else if (d > 1.7) { n.state = 'hostile'; steer(n, p.x, p.z, 4.6, dt); }
+      if (n.hostileT <= 0 || S.inCar) {
+        n.aimPose = false;
+        if (n.homeX !== undefined && n.homeState === 'stand') n.state = 'return';
+        else n.state = 'wander';
+      } else if (n.weapon === 'pistol' && !S.inCar) {
+        // pistol fighters keep their distance and shoot from mid-range
+        if (d > 10) { n.state = 'hostile'; n.aimPose = false; n.closeT = 0; steer(n, p.x, p.z, 4.6, dt); }
+        else if (d < 4.5) {
+          n.closeT = (n.closeT || 0) + dt;
+          if (n.closeT > 1.2) {
+            // pinned against a wall at close range too long: stop
+            // retreating and shoot from here, like the stand-and-shoot band
+            n.state = 'hostile'; n.animSpeed = 0;
+            n.heading = Math.atan2(p.x - n.x, p.z - n.z);
+            n.aimPose = true;
+            n.shotCd = (n.shotCd || 1.2) - dt;
+            if (n.shotCd <= 0 && S.mode === 'playing') {
+              n.shotCd = 1.7;
+              n.closeT = 0;
+              sfx.shot();
+              n.swingT = 0.3;
+              n.barT = 5;
+              if (d <= 16) S.health -= CFG.bulletDamage;
+              S.combat.fightT = CFG.fightModeTime;
+            }
+          } else {
+            n.state = 'hostile'; n.aimPose = false;
+            const ax = d > 0.01 ? (n.x - p.x) / d : 1; const az = d > 0.01 ? (n.z - p.z) / d : 0;
+            steer(n, n.x + ax * 10, n.z + az * 10, 3.8, dt);
+          }
+        } else {
+          n.state = 'hostile'; n.animSpeed = 0; n.closeT = 0;
+          n.heading = Math.atan2(p.x - n.x, p.z - n.z);
+          n.aimPose = true;
+          n.shotCd = (n.shotCd || 1.2) - dt;
+          if (n.shotCd <= 0 && S.mode === 'playing') {
+            n.shotCd = 1.7;
+            sfx.shot();
+            n.swingT = 0.3;
+            n.barT = 5;
+            if (d <= 16) S.health -= CFG.bulletDamage;
+            S.combat.fightT = CFG.fightModeTime;
+          }
+        }
+      } else if (d > 1.7) { n.state = 'hostile'; n.aimPose = false; steer(n, p.x, p.z, 4.6, dt); }
       else {
-        n.state = 'attack'; n.animSpeed = 0;
+        n.state = 'attack'; n.animSpeed = 0; n.aimPose = false;
         n.heading = Math.atan2(p.x - n.x, p.z - n.z);
         n.hitCd = (n.hitCd || 0) - dt;
         if (n.hitCd <= 0 && !S.inCar && S.mode === 'playing') {
           n.hitCd = 1.1;
-          S.health -= n.armed ? 7 : 4;
+          S.health -= n.weapon === 'baton' ? CFG.batonDamage : (n.weapon === 'knife' ? CFG.knifeDamage : CFG.punchDamage);
+          S.combat.fightT = CFG.fightModeTime;
+          n.swingT = 0.35;
+          n.swingKind = 'punch';
+          n.barT = 5;
         }
       }
+    } else if (n.state === 'return') {
+      // walk back to the post they were dragged away from, then resume it
+      n.aimPose = false;
+      if (n.homeX === undefined) { n.state = 'wander'; }
+      else if (steer(n, n.homeX, n.homeZ, 3.2, dt)) { n.state = n.homeState || 'wander'; }
     } else { // wander - along the pavement network, waypoint by waypoint
       n.retargetT -= dt;
       if (n.kind === 'animal') {

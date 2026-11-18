@@ -163,7 +163,10 @@ export function updateHUD(weaponSnap) {
     lastStars = W.stars;
     el['hud-stars'].textContent = W.stars > 0 ? '★'.repeat(W.stars) + '☆'.repeat(5 - W.stars) : '';
   }
-  const wtxt = weaponSnap.active === 'pistol' ? `PISTOL · ${weaponSnap.ammo}` : weaponSnap.active.toUpperCase();
+  const wtxt = weaponSnap.active === 'pistol' ? `PISTOL · ${weaponSnap.ammo}`
+    : weaponSnap.active === 'baton' ? 'BASEBALL BAT'
+      : weaponSnap.active === 'knife' ? 'KNIFE'
+        : 'FISTS';
   if (wtxt !== lastWeapon) {
     lastWeapon = wtxt;
     el['hud-weapon'].textContent = wtxt;

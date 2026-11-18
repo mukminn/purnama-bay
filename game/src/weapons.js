@@ -9,7 +9,7 @@ import { sfx } from './audio.js';
 import { showHitMarker } from './hud.js';
 
 export const WPN = {
-  owned: { fists: true, baton: false, pistol: false },
+  owned: { fists: true, baton: false, pistol: false, knife: false },
   active: 'fists',
   ammo: 0,
 };
@@ -26,12 +26,20 @@ export function selectWeapon(name) {
 // The shop counter. Returns a message for the shop panel.
 export function buyItem(item) {
   if (item === 'baton') {
-    if (WPN.owned.baton) return 'You already own the baton.';
+    if (WPN.owned.baton) return 'You already own the baseball bat.';
     if (S.money < CFG.priceBaton) { sfx.denied(); return 'Not enough money.'; }
     S.money -= CFG.priceBaton;
     WPN.owned.baton = true;
     sfx.buy();
-    return 'Baton purchased. Press 1 to equip it.';
+    return 'Baseball bat purchased. Press 1 to equip it.';
+  }
+  if (item === 'knife') {
+    if (WPN.owned.knife) return 'You already own the knife.';
+    if (S.money < CFG.priceKnife) { sfx.denied(); return 'Not enough money.'; }
+    S.money -= CFG.priceKnife;
+    WPN.owned.knife = true;
+    sfx.buy();
+    return 'Knife purchased. Press 4 to equip it.';
   }
   if (item === 'pistol') {
     if (WPN.owned.pistol) return 'You already own the pistol.';
@@ -87,14 +95,17 @@ export function meleeAttack(kind) {
   const c = S.combat;
   if (S.inCar || S.mode !== 'playing') return false;
   if (c.attackCd > 0) { bufferedKind = kind; return true; }
-  const effective = kind === 'punch' && WPN.active === 'baton' ? 'baton' : kind;
+  const effective = kind === 'punch' && WPN.active === 'baton' ? 'baton'
+    : (kind === 'punch' && WPN.active === 'knife' ? 'knife' : kind);
   c.attackCd = CFG.attackCooldown;
   c.attackT = CFG.attackWindow;
   c.attackKind = effective;
   c.lastKind = kind;
   c.lastAt = S.time;
+  S.combat.fightT = CFG.fightModeTime;
   if (kind === 'kick') sfx.kick(); else sfx.punch();
-  const dmg = effective === 'baton' ? CFG.batonDamage : (kind === 'kick' ? CFG.kickDamage : CFG.punchDamage);
+  const dmg = effective === 'baton' ? CFG.batonDamage
+    : (effective === 'knife' ? CFG.knifeDamage : (kind === 'kick' ? CFG.kickDamage : CFG.punchDamage));
   const target = frontTarget(CFG.attackRange, 1.25);
   scareArea(S.p.x, S.p.z, 5);
   if (target) {
@@ -103,8 +114,8 @@ export function meleeAttack(kind) {
     if (result !== 'immune' && result !== 'fled') {
       reportCrime(S.p.x, S.p.z, target);
     }
-    if (result === 'down' && target.kind === 'thug' && target.armed) {
-      spawnDrop('pistol', target.x, target.z);
+    if (result === 'down' && target.kind === 'thug' && target.weapon) {
+      spawnDrop(target.weapon, target.x, target.z);
     }
   }
   return true;
@@ -131,14 +142,15 @@ export function shoot() {
   if (WPN.ammo <= 0) { sfx.dryFire(); return false; }
   WPN.ammo--;
   S.stats.shotsFired++;
+  S.combat.fightT = CFG.fightModeTime;
   sfx.shot();
   scareArea(S.p.x, S.p.z, 14);
   const target = frontTarget(34, 0.32);
   if (target) {
     const result = damageNPC(target, CFG.bulletDamage);
     if (result !== 'immune') { showHitMarker(); reportCrime(S.p.x, S.p.z, target); }
-    if (result === 'down' && target.kind === 'thug' && target.armed) {
-      spawnDrop('pistol', target.x, target.z);
+    if (result === 'down' && target.kind === 'thug' && target.weapon) {
+      spawnDrop(target.weapon, target.x, target.z);
     }
   } else {
     reportCrime(S.p.x, S.p.z, null);
@@ -155,7 +167,7 @@ export function initDrops(scene) {
 
 export function spawnDrop(weapon, x, z) {
   const geo = new THREE.TorusGeometry(0.85, 0.09, 8, 24);
-  const dropColor = weapon === 'pistol' ? 0xffd34d : 0x7ec8e3;
+  const dropColor = weapon === 'pistol' ? 0xffd34d : (weapon === 'knife' ? 0x9fd4ff : (weapon === 'baton' ? 0xc9973f : 0x7ec8e3));
   const mat = new THREE.MeshStandardMaterial({ color: dropColor, emissive: dropColor, emissiveIntensity: 0.9, roughness: 0.4 });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.rotation.x = Math.PI / 2;
@@ -178,7 +190,7 @@ export function updateDrops(dt) {
 
 // The display name the HUD and banners use for a weapon id.
 export function weaponLabel(id) {
-  return { fists: 'Fists', baton: 'Harbour Baton', pistol: 'Marlin Pistol' }[id] || id;
+  return { fists: 'Fists', baton: 'Slugger Baseball Bat', knife: 'Dock Knife', pistol: 'Marlin Pistol' }[id] || id;
 }
 
 // Walk-over pickup is NOT automatic: the player presses E beside the ring.
