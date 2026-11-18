@@ -1,183 +1,139 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='42' fill='%23e8a33d'/></svg>">
-<title>PURNAMA BAY — an original open-world crime game</title>
+<title>PURNAMA BAY - a tropical open-world crime story</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='%23ffd34d'/%3E%3C/svg%3E">
 <style>
-  html, body { margin:0; height:100%; overflow:hidden; background:#1a0f0a; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color:#f5efe6; }
-  #game-holder { position:fixed; inset:0; }
-  #game-holder canvas { display:block; width:100%; height:100%; touch-action:none; }
-  .panel { background:rgba(12,18,26,.78); border:1px solid rgba(255,201,60,.35); border-radius:10px; padding:8px 11px; backdrop-filter: blur(3px); }
-  #hud { position:fixed; inset:0; pointer-events:none; display:none; }
-  #objective { position:absolute; top:12px; left:12px; max-width:320px; }
-  #obj-title { font-weight:800; letter-spacing:.06em; color:#ffc93c; font-size:14px; text-transform:uppercase; }
-  #obj-text { font-size:14px; margin-top:3px; line-height:1.35; }
-  #obj-sub { font-size:12px; color:#bcd3e8; margin-top:2px; }
-  #wanted-box { position:absolute; top:12px; left:50%; transform:translateX(-50%); text-align:center; padding:6px 16px; }
-  #stars { font-size:24px; letter-spacing:4px; color:#2c3540; line-height:1; }
-  #stars .on { color:#ffc93c; text-shadow:0 0 8px rgba(255,180,0,.8); }
-  #know-icons { font-size:11px; color:#ffb3a0; min-height:14px; letter-spacing:.04em; }
-  #minimap-wrap { position:absolute; top:12px; right:12px; width:158px; height:158px; }
-  #minimap { width:158px; height:158px; border-radius:50%; border:2px solid rgba(255,201,60,.55); background:#0d2f42; display:block; }
-  #status-box { position:absolute; left:12px; bottom:12px; width:250px; }
-  #health-wrap { height:16px; background:#3a1414; border-radius:8px; overflow:hidden; border:1px solid rgba(255,255,255,.25); }
-  #health-fill { height:100%; width:100%; background:linear-gradient(90deg,#e33f2f,#ff7b4d); transition:width .15s; }
-  #money { font-size:20px; font-weight:800; color:#8be26b; margin-top:5px; }
-  #slots { display:flex; gap:6px; margin-top:6px; }
-  .slot { flex:1; text-align:center; font-size:11px; padding:5px 2px; border-radius:7px; background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.18); position:relative; }
-  .slot.active { border-color:#ffc93c; background:rgba(255,201,60,.18); color:#ffe9a8; }
-  .slot.locked { opacity:.45; }
-  .slot .lock { display:block; font-size:10px; color:#ffb3a0; }
-  #ammo { font-size:12px; color:#ffe9a8; margin-top:4px; min-height:14px; }
-  #police-panel { position:absolute; right:12px; bottom:118px; width:196px; font-size:12px; }
-  #police-panel h4 { margin:0 0 4px; font-size:11px; letter-spacing:.08em; color:#9fc6ff; }
-  #police-list { line-height:1.5; color:#dbe9f7; }
-  #arrest-wrap { display:none; margin-top:5px; height:8px; background:#40260f; border-radius:4px; overflow:hidden; }
-  #arrest-fill { height:100%; width:0%; background:#ffb020; }
-  #vehicle-box { position:absolute; right:12px; bottom:12px; text-align:right; display:none; }
-  #speedo { font-size:40px; font-weight:900; color:#fff; line-height:1; }
-  #speedo small { font-size:13px; color:#bcd3e8; }
-  #veh-name { font-size:14px; font-weight:700; color:#ffe9a8; }
-  #veh-cond-wrap { height:8px; background:#333; border-radius:4px; overflow:hidden; margin-top:4px; }
-  #veh-cond { height:100%; width:100%; background:#7fd069; }
-  #prompt { position:absolute; right:14px; bottom:210px; max-width:250px; text-align:right; font-size:15px; font-weight:700; color:#fff; text-shadow:0 1px 4px #000; display:none; }
-  #prompt b { background:#ffc93c; color:#1a1408; border-radius:5px; padding:1px 7px; margin-right:5px; }
-  #crosshair { position:absolute; left:50%; top:50%; width:22px; height:22px; transform:translate(-50%,-50%); display:none; }
-  #crosshair:before, #crosshair:after { content:""; position:absolute; background:rgba(255,255,255,.9); box-shadow:0 0 3px #000; }
-  #crosshair:before { left:10px; top:0; width:2px; height:22px; }
-  #crosshair:after { left:0; top:10px; width:22px; height:2px; }
-  #hitmarker { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%) rotate(45deg); width:26px; height:26px; display:none; }
-  #hitmarker:before, #hitmarker:after { content:""; position:absolute; background:#ffc93c; }
-  #hitmarker:before { left:12px; top:0; width:2px; height:26px; }
-  #hitmarker:after { left:0; top:12px; width:26px; height:2px; }
-  #dialog { position:absolute; left:50%; transform:translateX(-50%); bottom:86px; width:min(620px,92vw); display:none; pointer-events:none; }
-  #dialog .inner { display:flex; gap:12px; align-items:flex-start; }
-  #dlg-portrait { width:72px; height:72px; border-radius:10px; border:2px solid #ffc93c; background:#274b63; }
-  #dlg-name { font-weight:800; color:#ffc93c; letter-spacing:.05em; }
-  #dlg-text { font-size:15px; line-height:1.45; margin-top:2px; }
-  #dlg-hint { font-size:11px; color:#9fb6c9; margin-top:5px; }
-  #toast { position:absolute; top:86px; left:50%; transform:translateX(-50%); font-size:16px; font-weight:700; color:#ffe9a8; text-shadow:0 1px 5px #000; opacity:0; transition:opacity .25s; text-align:center; max-width:80vw; }
-  #shop { position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:rgba(5,8,12,.55); pointer-events:auto; }
-  #shop .card { width:min(430px,92vw); }
-  #shop h2 { margin:2px 0 4px; color:#ffc93c; letter-spacing:.05em; }
-  #shop .bal { color:#8be26b; font-weight:700; margin-bottom:8px; }
-  .shop-item { display:flex; justify-content:space-between; align-items:center; gap:10px; padding:8px 0; border-top:1px solid rgba(255,255,255,.12); font-size:14px; }
-  .shop-item button, .big-btn { pointer-events:auto; cursor:pointer; background:#ffc93c; color:#1a1408; border:0; border-radius:8px; font-weight:800; padding:9px 16px; font-size:14px; }
-  .shop-item button:disabled { background:#5a5142; color:#cbbfa5; cursor:default; }
-  #shop-msg { min-height:18px; color:#ffb3a0; font-size:13px; margin-top:6px; }
-  .screen { position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:linear-gradient(180deg, rgba(24,10,4,.82), rgba(6,10,16,.88)); pointer-events:auto; z-index:30; }
-  .screen .card { text-align:center; width:min(600px,92vw); padding:26px 28px; }
-  .screen h1 { font-size:52px; margin:0 0 4px; letter-spacing:.08em; color:#ffc93c; text-shadow:0 3px 0 #a33c14, 0 8px 28px rgba(0,0,0,.6); }
-  .screen h2 { font-size:34px; margin:0 0 8px; letter-spacing:.1em; }
-  .screen p { line-height:1.5; color:#e8e0cf; }
-  .controls { font-size:12.5px; color:#bcd3e8; line-height:1.65; text-align:left; margin:12px auto 16px; max-width:480px; }
-  #menu-start { display:flex; }
-  #dmg-vignette { position:fixed; inset:0; pointer-events:none; box-shadow:inset 0 0 90px rgba(220,30,20,0); transition:box-shadow .12s; z-index:20; }
-  #rotate-overlay { position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:#101820; z-index:60; text-align:center; }
-  #rotate-overlay .big { font-size:30px; font-weight:900; letter-spacing:.1em; color:#ffc93c; }
-  #marker-label { position:absolute; left:50%; top:34%; transform:translateX(-50%); font-size:12px; font-weight:700; color:#ffd166; text-shadow:0 1px 4px #000; display:none; }
-  .fade-in { animation: fadeIn .35s ease-out; }
-  @keyframes fadeIn { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:none; } }
-  /* touch controls */
-  #touch-ui { position:fixed; inset:0; pointer-events:none; display:none; z-index:15; }
-  #joy-base { position:absolute; left:26px; bottom:96px; width:124px; height:124px; border-radius:50%; background:rgba(255,255,255,.09); border:2px solid rgba(255,255,255,.3); pointer-events:auto; }
-  #joy-stick { position:absolute; left:50%; top:50%; width:56px; height:56px; border-radius:50%; background:rgba(255,201,60,.75); transform:translate(-50%,-50%); }
-  .tbtn { position:absolute; width:60px; height:60px; border-radius:50%; background:rgba(12,18,26,.72); border:2px solid rgba(255,255,255,.35); color:#fff; font-weight:800; font-size:12px; pointer-events:auto; display:flex; align-items:center; justify-content:center; text-align:center; }
-  .tbtn:active { background:rgba(255,201,60,.8); color:#1a1408; }
-  #btn-act { right:26px; bottom:170px; }
-  #btn-jump { right:100px; bottom:104px; }
-  #btn-crouch { right:26px; bottom:96px; }
-  #btn-atk { right:174px; bottom:170px; }
-  #btn-kick { right:174px; bottom:96px; }
-  #btn-weapon { right:100px; bottom:238px; }
-  #btn-brake { right:100px; bottom:170px; display:none; }
-  #btn-pause-t { right:14px; top:186px; width:48px; height:48px; }
-  @media (max-width: 760px) {
-    #objective { max-width:44vw; } #obj-text { font-size:12px; }
-    #police-panel { display:none; }
-    #minimap-wrap, #minimap { width:104px; height:104px; }
-    #status-box { width:180px; bottom:236px; }
-    #prompt { bottom:330px; }
-    #dialog { bottom:250px; }
-  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0d1620; font-family: system-ui, "Segoe UI", sans-serif; color: #f4f1e6; }
+  #scene { position: fixed; inset: 0; }
+  #scene canvas { display: block; }
+  .panel { background: rgba(13, 22, 32, 0.78); border: 1px solid rgba(255, 211, 77, 0.35); border-radius: 10px; backdrop-filter: blur(3px); }
+  /* ---------- HUD ---------- */
+  #hud { position: fixed; inset: 0; pointer-events: none; display: none; }
+  #objective { position: fixed; top: 12px; left: 12px; max-width: 300px; padding: 9px 12px; font-size: 14px; line-height: 1.35; color: #ffe9a8; }
+  #minimap-wrap { position: fixed; top: 12px; right: 12px; width: 148px; height: 148px; border-radius: 50%; overflow: hidden; border: 2px solid rgba(255,255,255,0.35); background: #79a85b; }
+  #minimap { width: 148px; height: 148px; display: block; }
+  #status-box { position: fixed; top: 108px; left: 12px; width: 196px; padding: 9px 12px; }
+  #hud-money { font-size: 19px; font-weight: 700; color: #ffd34d; }
+  #hud-health-track { height: 9px; background: rgba(255,255,255,0.18); border-radius: 5px; margin: 6px 0; overflow: hidden; }
+  #hud-health-fill { height: 100%; width: 100%; background: #57c256; transition: width 0.2s; }
+  #hud-stars { font-size: 17px; color: #ffd34d; min-height: 20px; letter-spacing: 2px; }
+  #hud-weapon { font-size: 12.5px; color: #bcd8e8; letter-spacing: 1px; }
+  #prompt { position: fixed; right: 36px; bottom: 118px; width: 180px; padding: 10px 8px; text-align: center; font-weight: 700; font-size: 14.5px; color: #0d1620; background: #ffd34d; border-radius: 9px; display: none; box-shadow: 0 4px 18px rgba(0,0,0,0.4); }
+  #banner { position: fixed; top: 64px; left: 50%; transform: translateX(-50%); padding: 10px 22px; font-size: 19px; font-weight: 700; color: #ffd34d; opacity: 0; transition: opacity 0.4s; pointer-events: none; }
+  /* ---------- dialog ---------- */
+  #dialog { position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%); width: min(620px, 92vw); display: none; gap: 12px; padding: 12px; align-items: flex-start; pointer-events: auto; }
+  #dialog-portrait { width: 96px; height: 96px; border-radius: 8px; border: 2px solid rgba(255,211,77,0.5); flex: none; }
+  #dialog-name { font-weight: 700; color: #ffd34d; margin-bottom: 4px; }
+  #dialog-text { font-size: 15px; line-height: 1.45; }
+  #dialog-next { margin-top: 8px; padding: 7px 18px; background: #ffd34d; color: #0d1620; border: 0; border-radius: 7px; font-weight: 700; cursor: pointer; }
+  /* ---------- shop ---------- */
+  #shop { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(430px, 94vw); padding: 18px; display: none; pointer-events: auto; z-index: 30; }
+  #shop h2 { color: #ffd34d; font-size: 22px; margin-bottom: 2px; }
+  #shop .sub { color: #bcd8e8; font-size: 13px; margin-bottom: 12px; }
+  .shop-row { display: flex; justify-content: space-between; align-items: center; padding: 9px 0; border-top: 1px solid rgba(255,255,255,0.12); }
+  .shop-row button { padding: 8px 16px; background: #0f7d8c; color: #fff; border: 0; border-radius: 7px; font-weight: 700; cursor: pointer; min-width: 86px; }
+  #shop-msg { min-height: 20px; color: #ffe9a8; margin-top: 10px; font-size: 14px; }
+  #shop-close { margin-top: 8px; width: 100%; padding: 9px; background: #31435c; color: #fff; border: 0; border-radius: 7px; font-weight: 700; cursor: pointer; }
+  /* ---------- menu / end ---------- */
+  .full-overlay { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; background: linear-gradient(180deg, rgba(13,30,44,0.55), rgba(13,22,32,0.88)); z-index: 40; padding: 20px; }
+  #menu h1 { font-size: clamp(38px, 8vw, 74px); letter-spacing: 3px; color: #ffd34d; text-shadow: 0 4px 0 #b8452e, 0 8px 26px rgba(0,0,0,0.6); }
+  #menu .tag { font-size: clamp(14px, 2.4vw, 19px); color: #ffe9a8; margin: 10px 0 22px; max-width: 640px; line-height: 1.5; }
+  .big-btn { padding: 14px 44px; font-size: 19px; font-weight: 800; letter-spacing: 1px; background: #ffd34d; color: #0d1620; border: 0; border-radius: 10px; cursor: pointer; margin: 5px; box-shadow: 0 5px 0 #b8860b; }
+  .big-btn.alt { background: #0f7d8c; color: #fff; box-shadow: 0 5px 0 #0a4f59; }
+  #menu .controls { margin-top: 24px; font-size: 13.5px; color: #bcd8e8; line-height: 1.8; max-width: 660px; }
+  #end-overlay { display: none; }
+  #end-overlay h1 { font-size: clamp(34px, 7vw, 60px); color: #ff6b57; letter-spacing: 2px; }
+  #end-text { margin: 12px 0 20px; font-size: 16.5px; color: #ffe9a8; max-width: 520px; line-height: 1.5; }
+  /* ---------- rotate gate ---------- */
+  #rotate-overlay { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; flex-direction: column; background: #0d1620; z-index: 90; pointer-events: none; text-align: center; padding: 24px; }
+  #rotate-overlay .big { font-size: 27px; font-weight: 800; letter-spacing: 2px; color: #ffd34d; }
+  #rotate-overlay .small { margin-top: 10px; color: #bcd8e8; font-size: 15px; line-height: 1.5; }
+  @media (orientation: portrait) { #rotate-overlay { display: flex; } }
+  /* ---------- touch ---------- */
+  #touch-ui { position: fixed; inset: 0; display: none; pointer-events: none; z-index: 20; }
+  #joy-base { position: fixed; left: 22px; bottom: 22px; width: 124px; height: 124px; border-radius: 50%; background: rgba(255,255,255,0.10); border: 2px solid rgba(255,255,255,0.3); pointer-events: auto; }
+  #joy-knob { position: absolute; left: 50%; top: 50%; width: 54px; height: 54px; margin: -27px 0 0 -27px; border-radius: 50%; background: rgba(255,211,77,0.75); }
+  .tbtn { position: fixed; width: 64px; height: 64px; border-radius: 50%; background: rgba(13,22,32,0.72); border: 2px solid rgba(255,211,77,0.55); color: #ffe9a8; font-weight: 800; font-size: 12.5px; display: flex; align-items: center; justify-content: center; pointer-events: auto; user-select: none; -webkit-user-select: none; }
+  #btn-act { right: 24px; bottom: 24px; }
+  #btn-brake { right: 102px; bottom: 24px; display: none; }
+  #btn-jump { right: 24px; bottom: 102px; }
+  #btn-hit { right: 102px; bottom: 102px; }
 </style>
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.min.js" } }
+</script>
 </head>
 <body>
-<div id="game-holder"></div>
+<div id="scene"></div>
 
 <div id="hud">
-  <div id="objective" class="panel"><div id="obj-title">PURNAMA BAY</div><div id="obj-text">Talk to Mira at the dock.</div><div id="obj-sub"></div></div>
-  <div id="wanted-box" class="panel"><div id="stars"></div><div id="know-icons"></div></div>
-  <div id="minimap-wrap"><canvas id="minimap" width="316" height="316"></canvas></div>
+  <div id="objective" class="panel"></div>
+  <div id="minimap-wrap"><canvas id="minimap" width="148" height="148"></canvas></div>
   <div id="status-box" class="panel">
-    <div id="health-wrap"><div id="health-fill"></div></div>
-    <div id="money">PB$ 0</div>
-    <div id="slots"></div>
-    <div id="ammo"></div>
+    <div id="hud-money">PB$ 0</div>
+    <div id="hud-health-track"><div id="hud-health-fill"></div></div>
+    <div id="hud-stars"></div>
+    <div id="hud-weapon">FISTS</div>
   </div>
-  <div id="police-panel" class="panel"><h4>POLICE RESPONSE</h4><div id="police-list">No units dispatched</div><div id="arrest-wrap"><div id="arrest-fill"></div></div></div>
-  <div id="vehicle-box" class="panel"><div id="speedo">0 <small>km/h</small></div><div id="veh-name">—</div><div id="veh-cond-wrap"><div id="veh-cond"></div></div></div>
   <div id="prompt"></div>
-  <div id="crosshair"></div>
-  <div id="hitmarker"></div>
-  <div id="dialog" class="panel"><div class="inner"><img id="dlg-portrait" alt="Mira Santoso portrait"><div><div id="dlg-name">Mira Santoso</div><div id="dlg-text"></div><div id="dlg-hint">Click / tap / E — next</div></div></div></div>
-  <div id="toast"></div>
-  <div id="marker-label"></div>
+  <div id="banner" class="panel"></div>
 </div>
 
-<div id="shop"><div class="card panel">
-  <h2 id="shop-name">PURNAMA ARMS</h2>
-  <div class="bal" id="shop-bal">Balance: PB$ 0</div>
-  <div class="shop-item"><span><b>Baton</b> — harbour-issue truncheon<br>PB$ 250 · slot 1</span><button data-buy="baton">BUY</button></div>
-  <div class="shop-item"><span><b>Pistol</b> — licensed sidearm, 12 rounds<br>PB$ 900 · slot 2</span><button data-buy="pistol">BUY</button></div>
-  <div class="shop-item"><span><b>Ammo ×12</b> — pistol rounds<br>PB$ 60</span><button data-buy="ammo">BUY</button></div>
-  <div id="shop-msg"></div>
-  <div style="margin-top:10px; text-align:right;"><button class="big-btn" id="shop-close">LEAVE (F)</button></div>
-</div></div>
-
-<div id="menu-start" class="screen"><div class="card panel">
-  <h1>PURNAMA BAY</h1>
-  <p>Raka Pradana, a dock courier, is framed by the Kala Syndicate for a lost crate.<br>
-  Work the harbour, clear your name, and outrun the bay's police — one honest job at a time.</p>
-  <div class="controls">
-    WASD move · Alt walk · Shift sprint · Space jump · C crouch · F enter/exit car · E interact<br>
-    J punch · K kick · Mouse click shoot · Q / 1–3 weapons · Drag mouse camera · P / Esc pause · M mute
+<div id="dialog" class="panel">
+  <canvas id="dialog-portrait" width="96" height="96"></canvas>
+  <div>
+    <div id="dialog-name">Mira Santoso</div>
+    <div id="dialog-text"></div>
+    <button id="dialog-next">OK</button>
   </div>
-  <button class="big-btn" id="btn-start">START</button>
-  <button class="big-btn" id="btn-continue" style="display:none; background:#7fb069;">CONTINUE</button>
-  <p style="font-size:12px; color:#9fb6c9;">An original open-world crime game. Best in landscape on touch devices.</p>
-</div></div>
+</div>
 
-<div id="menu-pause" class="screen"><div class="card panel">
-  <h2>PAUSED</h2>
-  <p id="pause-info">Purnama Bay waits for no tide.</p>
-  <button class="big-btn" id="btn-resume">RESUME</button>
-  <button class="big-btn" id="btn-save" style="background:#7fb069;">SAVE</button>
-  <button class="big-btn" id="btn-restart" style="background:#b0563a; color:#fff;">RESTART STORY</button>
-</div></div>
-
-<div id="screen-end" class="screen"><div class="card panel">
-  <h2 id="end-title">BUSTED</h2>
-  <p id="end-text"></p>
-  <button class="big-btn" id="btn-end-ok">CONTINUE</button>
-</div></div>
+<div id="shop" class="panel">
+  <h2>PURNAMA ARMS</h2>
+  <div class="sub">Licensed dockside dealer · Balance: <span id="shop-money">PB$ 0</span></div>
+  <div class="shop-row"><span>Harbour Baton</span><button data-buy="baton">PB$ 250</button></div>
+  <div class="shop-row"><span>Marlin Pistol (+12 rounds)</span><button data-buy="pistol">PB$ 900</button></div>
+  <div class="shop-row"><span>Pistol rounds ×12</span><button data-buy="ammo">PB$ 60</button></div>
+  <div id="shop-msg"></div>
+  <button id="shop-close">Leave shop</button>
+</div>
 
 <div id="touch-ui">
-  <div id="joy-base"><div id="joy-stick"></div></div>
-  <div class="tbtn" id="btn-act">ACT</div>
-  <div class="tbtn" id="btn-jump">JUMP</div>
-  <div class="tbtn" id="btn-crouch">CROUCH</div>
-  <div class="tbtn" id="btn-atk">ATK</div>
-  <div class="tbtn" id="btn-kick">KICK</div>
-  <div class="tbtn" id="btn-weapon">WEAPON</div>
-  <div class="tbtn" id="btn-brake">BRAKE</div>
-  <div class="tbtn" id="btn-pause-t">II</div>
+  <div id="joy-base"><div id="joy-knob"></div></div>
+  <div id="btn-act" class="tbtn">ACT</div>
+  <div id="btn-brake" class="tbtn">BRAKE</div>
+  <div id="btn-jump" class="tbtn">JUMP</div>
+  <div id="btn-hit" class="tbtn">HIT</div>
 </div>
 
-<div id="rotate-overlay"><div><div class="big">ROTATE YOUR DEVICE</div><p>Purnama Bay plays in landscape.<br>Turn your phone sideways to begin.</p></div></div>
-<div id="dmg-vignette"></div>
+<div id="menu" class="full-overlay">
+  <h1>PURNAMA BAY</h1>
+  <div class="tag">Raka Pradana, a pier courier framed by the Kala Syndicate, takes six jobs from Mira Santoso to clear his name in a sun-soaked coastal city. Drive, sneak, chase - and watch who sees you.</div>
+  <div>
+    <button id="btn-start" class="big-btn">START</button>
+    <button id="btn-continue" class="big-btn alt" style="display:none">CONTINUE</button>
+  </div>
+  <div class="controls">
+    WASD move · Alt walk · Shift sprint · Space jump / brake · C crouch · J punch · K kick · 1 baton · 2 pistol · 3 fists · F enter / exit car · E interact · P pause · M mute<br>
+    Wanted stars rise only when a crime is witnessed. Money comes only from Mira's jobs.<br>
+    Six jobs, one bay: First Run · Dock Hands · Borrowed Wheels · Quiet Warehouse · Tail Breaker · Last Ferry Out.
+  </div>
+</div>
+
+<div id="end-overlay" class="full-overlay">
+  <h1 id="end-title">BUSTED</h1>
+  <div id="end-text"></div>
+  <button id="btn-end-ok" class="big-btn">BACK TO THE BAY</button>
+</div>
+
+<div id="rotate-overlay">
+  <div class="big">ROTATE YOUR DEVICE</div>
+  <div class="small">Purnama Bay is played in landscape.<br>Turn your phone sideways to play.</div>
+</div>
 
 <script type="module" src="./src/main.js"></script>
 </body>

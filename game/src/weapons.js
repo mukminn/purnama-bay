@@ -1,192 +1,195 @@
-// Weapons & economy: fists from the start, everything else earned — either
-// bought at PURNAMA ARMS with mission money, or looted from a fallen armed
-// thug (gold ring pickup, ACT to take, limited ammo). Locked slots stay
-// visible in the HUD, greyed with a lock, and cannot be selected.
-import * as THREE from '../vendor/three.module.min.js';
-import { CFG } from './config.js';
+// PURNAMA BAY - fists, baton and pistol. Weapons are only ever gained two
+// ways: bought at PURNAMA ARMS, or picked up from the ring a fallen armed
+// thug drops. There is no other source, and no weapon yields money.
+import * as THREE from 'three';
+import { S, CFG, dist2d } from './config.js';
+import { damageNPC, scareArea } from './population.js';
+import { reportCrime } from './wanted.js';
+import { sfx } from './audio.js';
 
-export function createWeapons() {
-  const inv = {
-    owned: { baton: false, pistol: false },
-    active: 'fists',
-    ammo: 0,
-    select(id) {
-      if (id === 'fists') { inv.active = 'fists'; return true; }
-      if (!inv.owned[id]) return false; // locked: refuse, HUD shows the lock
-      inv.active = id;
-      return true;
-    },
-    cycle() {
-      const order = ['fists', 'baton', 'pistol'];
-      for (let step = 1; step <= 3; step++) {
-        const next = order[(order.indexOf(inv.active) + step) % 3];
-        if (next === 'fists' || inv.owned[next]) { inv.active = next; return inv.active; }
-      }
-      return inv.active;
-    },
-    gain(id, ammo = 0) {
-      if (id === 'baton') inv.owned.baton = true;
-      if (id === 'pistol') { inv.owned.pistol = true; inv.ammo += ammo; }
-      inv.active = id;
-    },
-  };
-  return inv;
+export const WPN = {
+  owned: { fists: true, baton: false, pistol: false },
+  active: 'fists',
+  ammo: 0,
+};
+
+export function weaponsSnapshot() {
+  return { active: WPN.active, owned: { ...WPN.owned }, ammo: WPN.ammo };
 }
 
-// The shop till. spend(amount) is supplied by main (the only place money
-// moves besides mission rewards and the busted fine) and returns false when
-// the balance cannot cover it.
-export function buyItem(item, inv, spend) {
+export function selectWeapon(name) {
+  if (WPN.owned[name]) { WPN.active = name; return true; }
+  return false;
+}
+
+// The shop counter. Returns a message for the shop panel.
+export function buyItem(item) {
   if (item === 'baton') {
-    if (inv.owned.baton) return { ok: false, msg: 'You already own the baton.' };
-    if (!spend(CFG.prices.baton)) return { ok: false, msg: `Not enough money — baton costs ${CFG.currency} ${CFG.prices.baton}.` };
-    inv.owned.baton = true;
-    return { ok: true, msg: `Baton bought for ${CFG.currency} ${CFG.prices.baton}. Slot 1 unlocked.` };
+    if (WPN.owned.baton) return 'You already own the baton.';
+    if (S.money < CFG.priceBaton) { sfx.denied(); return 'Not enough money.'; }
+    S.money -= CFG.priceBaton;
+    WPN.owned.baton = true;
+    sfx.buy();
+    return 'Baton purchased. Press 1 to equip it.';
   }
   if (item === 'pistol') {
-    if (inv.owned.pistol) return { ok: false, msg: 'You already own the pistol. Buy ammo instead.' };
-    if (!spend(CFG.prices.pistol)) return { ok: false, msg: `Not enough money — pistol costs ${CFG.currency} ${CFG.prices.pistol}.` };
-    inv.owned.pistol = true;
-    inv.ammo += 12;
-    return { ok: true, msg: `Pistol bought for ${CFG.currency} ${CFG.prices.pistol} (12 rounds included).` };
+    if (WPN.owned.pistol) return 'You already own the pistol.';
+    if (S.money < CFG.pricePistol) { sfx.denied(); return 'Not enough money.'; }
+    S.money -= CFG.pricePistol;
+    WPN.owned.pistol = true;
+    WPN.ammo += CFG.ammoPack;
+    sfx.buy();
+    return 'Pistol purchased with 12 rounds. Press 2 to equip it.';
   }
   if (item === 'ammo') {
-    if (!inv.owned.pistol) return { ok: false, msg: 'You need a pistol before buying ammo.' };
-    if (!spend(CFG.prices.ammo)) return { ok: false, msg: `Not enough money — ammo costs ${CFG.currency} ${CFG.prices.ammo}.` };
-    inv.ammo += CFG.ammoPack;
-    return { ok: true, msg: `+${CFG.ammoPack} rounds for ${CFG.currency} ${CFG.prices.ammo}.` };
+    if (!WPN.owned.pistol) return 'You need a pistol first.';
+    if (S.money < CFG.priceAmmo) { sfx.denied(); return 'Not enough money.'; }
+    S.money -= CFG.priceAmmo;
+    WPN.ammo += CFG.ammoPack;
+    sfx.buy();
+    return '12 rounds added.';
   }
-  return { ok: false, msg: 'Unknown item.' };
+  return '';
 }
 
-// --- loot drops: a gold ring on the ground where an armed thug fell ---
-export function createDrops(scene) {
-  const drops = [];
-  const ringGeo = new THREE.TorusGeometry(0.85, 0.07, 8, 24);
-  const ringMat = new THREE.MeshLambertMaterial({ color: 0xffc93c, emissive: 0xa87408, emissiveIntensity: 1.4 });
-  return {
-    drops,
-    spawn(x, z, weapon, ammo = 0) {
-      const ring = new THREE.Mesh(ringGeo, ringMat);
-      ring.rotation.x = Math.PI / 2;
-      ring.position.set(x, 0.12, z);
-      scene.add(ring);
-      const icon = new THREE.Mesh(
-        new THREE.BoxGeometry(weapon === 'pistol' ? 0.16 : 0.1, weapon === 'pistol' ? 0.26 : 0.7, weapon === 'pistol' ? 0.5 : 0.1),
-        new THREE.MeshLambertMaterial({ color: 0x22242a }),
-      );
-      icon.position.set(x, 0.55, z);
-      scene.add(icon);
-      drops.push({ x, z, weapon, ammo, ring, icon });
-    },
-    update(t) {
-      for (const d of drops) {
-        d.ring.rotation.z = t * 1.4;
-        d.icon.position.y = 0.55 + Math.sin(t * 3 + d.x) * 0.08;
-        d.icon.rotation.y = t * 1.1;
-      }
-    },
-    nearest(x, z, maxD = 2.2) {
-      let best = null, bd = maxD;
-      for (const d of drops) {
-        const dist = Math.hypot(d.x - x, d.z - z);
-        if (dist < bd) { bd = dist; best = d; }
-      }
-      return best;
-    },
-    take(drop) {
-      scene.remove(drop.ring); scene.remove(drop.icon);
-      drops.splice(drops.indexOf(drop), 1);
-    },
-    clear() { while (drops.length) this.take(drops[0]); },
-  };
-}
-
-// Damage table per attack kind (single source, mirrors CFG).
-export function damageFor(kind, inv) {
-  if (kind === 'kick') return CFG.kickDamage;
-  if (kind === 'punch') return inv && inv.active === 'baton' ? CFG.batonDamage : CFG.punchDamage;
-  if (kind === 'shot') return CFG.pistolDamage;
-  return CFG.punchDamage;
-}
-export function cooldownFor(kind, inv) {
-  if (kind === 'kick') return CFG.kickCooldown;
-  if (kind === 'shot') return CFG.pistolCooldown;
-  if (inv && inv.active === 'baton') return CFG.batonCooldown;
-  return CFG.punchCooldown;
-}
-export function rangeFor(kind, inv) {
-  if (kind === 'kick') return CFG.kickRange;
-  if (inv && inv.active === 'baton') return CFG.batonRange;
-  return CFG.punchRange;
-}
-
-// Melee: find the best adult target in front of the attacker. Children are
-// filtered out here — they can never be a melee target.
-export function meleeTarget(people, policeUnits, x, z, heading, range) {
-  let best = null, bestScore = -Infinity;
-  const fx = Math.sin(heading), fz = Math.cos(heading);
-  function consider(px, pz, ref, kind) {
-    const dx = px - x, dz = pz - z;
-    const d = Math.hypot(dx, dz);
-    if (d > range + 0.35) return;
-    const dot = d < 0.001 ? 1 : (dx * fx + dz * fz) / d;
-    if (d > 0.8 && dot < 0.25) return;
-    const score = dot * 2 - d;
-    if (score > bestScore) { bestScore = score; best = { ref, kind, dist: d }; }
-  }
-  for (const p of people) {
-    if (p.kind === 'child' || p.state === 'down') continue;
-    consider(p.pos.x, p.pos.z, p, 'person');
-  }
-  for (const u of policeUnits) {
-    if (u.kind !== 'foot') continue;
-    consider(u.pos.x, u.pos.z, u, 'officer');
+function frontTarget(maxDist, arc) {
+  const p = S.p;
+  let best = null; let bd = maxDist;
+  for (const n of S.npcs) {
+    if (n.kind === 'child' || n.state === 'down') continue;
+    const d = dist2d(p.x, p.z, n.x, n.z);
+    if (d > bd) continue;
+    const ang = Math.atan2(n.x - p.x, n.z - p.z);
+    let diff = ang - p.heading;
+    while (diff > Math.PI) diff -= Math.PI * 2;
+    while (diff < -Math.PI) diff += Math.PI * 2;
+    if (Math.abs(diff) <= arc) { best = n; bd = d; }
   }
   return best;
 }
 
-// Pistol ray: manual sphere tests against adults, officers and cars, plus a
-// building stop via the world colliders. Children are never in the list.
-export function rayHit(origin, dir, people, policeUnits, cars, colliders, maxDist = CFG.pistolRange) {
-  let best = null;
-  function sphere(cx, cy, cz, r, ref, kind) {
-    const ox = cx - origin.x, oy = cy - origin.y, oz = cz - origin.z;
-    const t = ox * dir.x + oy * dir.y + oz * dir.z;
-    if (t < 0 || t > maxDist) return;
-    const px = origin.x + dir.x * t, py = origin.y + dir.y * t, pz = origin.z + dir.z * t;
-    const d = Math.hypot(cx - px, cy - py, cz - pz);
-    if (d < r && (!best || t < best.t)) best = { t, ref, kind, point: { x: px, y: py, z: pz } };
-  }
-  for (const p of people) {
-    if (p.kind === 'child' || p.state === 'down') continue;
-    const s = (p.group.scale.x || 1);
-    sphere(p.pos.x, 1.05 * s, p.pos.z, 0.55, p, 'person');
-  }
-  for (const u of policeUnits) {
-    if (u.kind === 'foot') sphere(u.pos.x, 1.05, u.pos.z, 0.55, u, 'officer');
-    else sphere(u.pos.x, 0.8, u.pos.z, 1.9, u.car, 'car');
-  }
-  for (const c of cars) sphere(c.pos.x, 0.8, c.pos.z, 1.9, c, 'car');
-  // buildings stop the bullet
-  for (const col of colliders) {
-    // slab test on the XZ footprint at chest height
-    let tmin = 0, tmax = maxDist;
-    const axes = [['x', col.minX, col.maxX], ['z', col.minZ, col.maxZ]];
-    let ok = true;
-    for (const [axis, mn, mx] of axes) {
-      const o = origin[axis], d = dir[axis];
-      if (Math.abs(d) < 1e-6) { if (o < mn || o > mx) { ok = false; break; } }
-      else {
-        let t1 = (mn - o) / d, t2 = (mx - o) / d;
-        if (t1 > t2) [t1, t2] = [t2, t1];
-        tmin = Math.max(tmin, t1); tmax = Math.min(tmax, t2);
-        if (tmin > tmax) { ok = false; break; }
-      }
+// Input buffer: a swing pressed a fraction before the cooldown ends is
+// queued and fires the moment it can, instead of being silently dropped.
+let bufferedKind = '';
+export function flushBufferedAttack() {
+  if (!bufferedKind) return;
+  if (S.inCar || S.mode !== 'playing') { bufferedKind = ''; return; }
+  if (S.combat.attackCd > 0) return;
+  const kind = bufferedKind;
+  bufferedKind = '';
+  meleeAttack(kind);
+}
+
+// One melee swing through the normal combat path. kind: 'punch' | 'kick'.
+// A baton in hand turns a punch into a baton strike.
+export function meleeAttack(kind) {
+  const c = S.combat;
+  if (S.inCar || S.mode !== 'playing') return false;
+  if (c.attackCd > 0) { bufferedKind = kind; return true; }
+  const effective = kind === 'punch' && WPN.active === 'baton' ? 'baton' : kind;
+  c.attackCd = CFG.attackCooldown;
+  c.attackT = CFG.attackWindow;
+  c.attackKind = effective;
+  c.lastKind = kind;
+  c.lastAt = S.time;
+  if (kind === 'kick') sfx.kick(); else sfx.punch();
+  const dmg = effective === 'baton' ? CFG.batonDamage : (kind === 'kick' ? CFG.kickDamage : CFG.punchDamage);
+  const target = frontTarget(CFG.attackRange, 1.25);
+  scareArea(S.p.x, S.p.z, 5);
+  if (target) {
+    const result = damageNPC(target, dmg);
+    if (result !== 'immune' && result !== 'fled') {
+      reportCrime(S.p.x, S.p.z, target);
     }
-    if (ok && tmin > 0 && tmin < maxDist && (!best || tmin < best.t)) {
-      best = { t: tmin, ref: null, kind: 'wall', point: { x: origin.x + dir.x * tmin, y: origin.y + dir.y * tmin, z: origin.z + dir.z * tmin } };
+    if (result === 'down' && target.kind === 'thug' && target.armed) {
+      spawnDrop('pistol', target.x, target.z);
     }
   }
-  return best;
+  return true;
+}
+
+// A directed punch at the nearest adult, wherever the player is facing:
+// the player turns to them first, then the normal melee path runs.
+export function punchNearest() {
+  const p = S.p;
+  let best = null; let bd = 30;
+  for (const n of S.npcs) {
+    if (n.kind === 'child' || n.kind === 'animal' || n.state === 'down') continue;
+    const d = dist2d(p.x, p.z, n.x, n.z);
+    if (d < bd) { bd = d; best = n; }
+  }
+  if (!best) return false;
+  p.heading = Math.atan2(best.x - p.x, best.z - p.z);
+  S.combat.attackCd = 0;
+  return meleeAttack('punch');
+}
+
+export function shoot() {
+  if (WPN.active !== 'pistol' || S.inCar || S.mode !== 'playing') return false;
+  if (WPN.ammo <= 0) { sfx.dryFire(); return false; }
+  WPN.ammo--;
+  S.stats.shotsFired++;
+  sfx.shot();
+  scareArea(S.p.x, S.p.z, 14);
+  const target = frontTarget(34, 0.32);
+  if (target) {
+    const result = damageNPC(target, CFG.bulletDamage);
+    if (result !== 'immune') reportCrime(S.p.x, S.p.z, target);
+    if (result === 'down' && target.kind === 'thug' && target.armed) {
+      spawnDrop('pistol', target.x, target.z);
+    }
+  } else {
+    reportCrime(S.p.x, S.p.z, null);
+  }
+  return true;
+}
+
+// A glowing ring on the ground where a fallen armed thug dropped a weapon.
+const dropGroup = new THREE.Group();
+let dropSceneReady = false;
+export function initDrops(scene) {
+  if (!dropSceneReady) { scene.add(dropGroup); dropSceneReady = true; }
+}
+
+export function spawnDrop(weapon, x, z) {
+  const geo = new THREE.TorusGeometry(0.85, 0.09, 8, 24);
+  const mat = new THREE.MeshBasicMaterial({ color: weapon === 'pistol' ? 0xffd34d : 0x7ec8e3 });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.rotation.x = Math.PI / 2;
+  mesh.position.set(x, 0.35, z);
+  dropGroup.add(mesh);
+  S.drops.push({ weapon, ammo: weapon === 'pistol' ? 12 : 0, x, z, mesh });
+  return mesh;
+}
+
+export function dropsInfo() {
+  return S.drops.map((d) => ({ weapon: d.weapon, ammo: d.ammo, x: Math.round(d.x * 10) / 10, z: Math.round(d.z * 10) / 10 }));
+}
+
+export function updateDrops(dt) {
+  for (const d of S.drops) {
+    d.mesh.rotation.z += dt * 1.6;
+    d.mesh.position.y = 0.35 + Math.sin(S.time * 3 + d.x) * 0.08;
+  }
+}
+
+// The display name the HUD and banners use for a weapon id.
+export function weaponLabel(id) {
+  return { fists: 'Fists', baton: 'Harbour Baton', pistol: 'Marlin Pistol' }[id] || id;
+}
+
+// Walk-over pickup is NOT automatic: the player presses E beside the ring.
+export function pickupDropAt(x, z) {
+  for (let i = 0; i < S.drops.length; i++) {
+    const d = S.drops[i];
+    if (dist2d(x, z, d.x, d.z) <= 2.1) {
+      WPN.owned[d.weapon] = true;
+      if (d.weapon === 'pistol') WPN.ammo += d.ammo;
+      dropGroup.remove(d.mesh);
+      S.drops.splice(i, 1);
+      sfx.pickup();
+      return d;
+    }
+  }
+  return null;
 }

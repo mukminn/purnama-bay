@@ -1,184 +1,134 @@
-// Fully articulated low-poly humans: head + hair, neck, torso, two-segment
-// arms with hands, two-segment legs with shoes — all posed procedurally
-// (idle / walk / run / sprint / drive / punch / kick / shoot / jump / crouch).
-import * as THREE from '../vendor/three.module.min.js';
+// PURNAMA BAY - low-poly people and animals assembled from boxes.
+// A person record carries its kind and (for adults only) a health value;
+// children are built WITHOUT any health field on purpose - the safety law
+// of the game is that a child can never be hurt, and the data shows it.
+import * as THREE from 'three';
 
-const matCache = new Map();
-function mat(color, rough = 0.85) {
-  // Lambert: far cheaper per-pixel than Standard in software rendering, and
-  // with the warm sun + hemisphere light it keeps the same golden-hour read.
-  const key = color + ':' + rough;
-  if (!matCache.has(key)) matCache.set(key, new THREE.MeshLambertMaterial({ color }));
-  return matCache.get(key);
-}
-function box(w, h, d, material, x = 0, y = 0, z = 0) {
-  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), material);
+const SKIN = [0xc98a5e, 0xa06a42, 0x8a5a34, 0xe0aa72];
+const SHIRTS = [0xd96f32, 0x0f7d8c, 0x3f7d4e, 0xc9973f, 0xb8452e, 0x7a4a8c, 0x2e5f8a, 0xe8e3d5];
+const PANTS = [0x2c343a, 0x4a3b2a, 0x31435c, 0x5c5142, 0x704214];
+
+let seed = 7;
+function pick(arr) { seed = (seed * 16807) % 2147483647; return arr[seed % arr.length]; }
+
+function limb(w, h, d, mat, x, y, z) {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
   m.position.set(x, y, z);
   m.castShadow = true;
   return m;
 }
 
-// opts: { skin, hair, shirt, pants, shoe, scale, cap }
-export function createHuman(opts = {}) {
+// Build a person. opts: {shirt, pants, skin, cap, scale, skirt}
+export function makePerson(opts = {}) {
   const s = opts.scale || 1;
   const g = new THREE.Group();
-  const skin = mat(opts.skin ?? 0xc68863);
-  const hairM = mat(opts.hair ?? 0x241610, 0.95);
-  const shirt = mat(opts.shirt ?? 0x3c78d8);
-  const pants = mat(opts.pants ?? 0x2e3a46);
-  const shoeM = mat(opts.shoe ?? 0x222222, 0.6);
-
-  const hips = new THREE.Group(); hips.position.y = 0.92; g.add(hips);
-  const torso = box(0.46, 0.58, 0.26, shirt, 0, 0.28, 0); hips.add(torso);
-  const headG = new THREE.Group(); headG.position.y = 0.66; hips.add(headG);
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.155, 12, 10), skin);
-  head.position.y = 0.1; head.castShadow = true; headG.add(head);
-  const hair = new THREE.Mesh(new THREE.SphereGeometry(0.162, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.55), hairM);
-  hair.position.y = 0.125; hair.castShadow = true; headG.add(hair);
+  const skinMat = new THREE.MeshLambertMaterial({ color: opts.skin ?? pick(SKIN) });
+  const shirtMat = new THREE.MeshLambertMaterial({ color: opts.shirt ?? pick(SHIRTS) });
+  const pantsMat = new THREE.MeshLambertMaterial({ color: opts.pants ?? pick(PANTS) });
+  const torso = limb(0.62, 0.72, 0.34, shirtMat, 0, 1.06, 0);
+  const head = limb(0.4, 0.44, 0.4, skinMat, 0, 1.66, 0);
+  const armL = limb(0.16, 0.66, 0.16, shirtMat, -0.4, 1.08, 0);
+  const armR = limb(0.16, 0.66, 0.16, shirtMat, 0.4, 1.08, 0);
+  const legL = limb(0.2, 0.72, 0.2, pantsMat, -0.16, 0.36, 0);
+  const legR = limb(0.2, 0.72, 0.2, pantsMat, 0.16, 0.36, 0);
+  g.add(torso, head, armL, armR, legL, legR);
   if (opts.cap) {
-    const cap = box(0.3, 0.06, 0.3, mat(opts.cap, 0.7), 0, 0.22, 0);
-    const brim = box(0.28, 0.03, 0.18, mat(opts.cap, 0.7), 0, 0.2, 0.2);
-    headG.add(cap); headG.add(brim);
+    const capMat = new THREE.MeshLambertMaterial({ color: opts.cap });
+    g.add(limb(0.46, 0.12, 0.46, capMat, 0, 1.92, 0));
+    g.add(limb(0.46, 0.05, 0.3, capMat, 0, 1.88, 0.34));
   }
-
-  function arm(side) {
-    const sh = new THREE.Group(); sh.position.set(0.29 * side, 0.52, 0); hips.add(sh);
-    const upper = box(0.13, 0.34, 0.13, shirt, 0, -0.15, 0); sh.add(upper);
-    upper.castShadow = false;
-    const el = new THREE.Group(); el.position.y = -0.32; sh.add(el);
-    // forearm runs into the hand (one piece, same skin tone, mitten end)
-    const fore = box(0.11, 0.42, 0.11, skin, 0, -0.19, 0); el.add(fore);
-    fore.castShadow = false;
-    return { sh, el };
+  if (opts.skirt) {
+    const skirt = limb(0.66, 0.4, 0.4, pantsMat, 0, 0.78, 0);
+    g.add(skirt);
   }
-  function leg(side) {
-    const hip = new THREE.Group(); hip.position.set(0.12 * side, 0.02, 0); g.add(hip);
-    hip.position.y = 0.92;
-    const thigh = box(0.16, 0.44, 0.16, pants, 0, -0.21, 0); hip.add(thigh);
-    thigh.castShadow = false;
-    const knee = new THREE.Group(); knee.position.y = -0.44; hip.add(knee);
-    const shin = box(0.13, 0.4, 0.13, pants, 0, -0.18, 0); knee.add(shin);
-    shin.castShadow = false;
-    const shoe = box(0.14, 0.09, 0.27, shoeM, 0, -0.4, 0.05); knee.add(shoe);
-    shoe.castShadow = false;
-    return { hip, knee };
-  }
-  const armL = arm(-1), armR = arm(1);
-  const legL = leg(-1), legR = leg(1);
   g.scale.setScalar(s);
-  g.userData.parts = { hips, headG, armL, armR, legL, legR };
-  g.userData.baseHipY = 0.92;
+  g.userData.parts = { armL, armR, legL, legR, torso, head };
   return g;
 }
 
-// Weapon props attached to the right hand: baton stick or a blocky pistol.
-export function attachWeaponProp(g, kind) {
-  const p = g.userData.parts;
-  if (g.userData.prop) { p.armR.el.remove(g.userData.prop); g.userData.prop = null; }
-  if (kind === 'baton') {
-    const prop = box(0.06, 0.62, 0.06, mat(0x2b2b30, 0.5), 0, -0.55, 0.04);
-    prop.rotation.x = 0.4;
-    p.armR.el.add(prop); g.userData.prop = prop;
-  } else if (kind === 'pistol') {
-    const grp = new THREE.Group();
-    const body = box(0.07, 0.13, 0.3, mat(0x1c1e22, 0.35), 0, -0.36, 0.1);
-    const grip = box(0.06, 0.16, 0.08, mat(0x111214, 0.5), 0, -0.44, 0.02);
-    grp.add(body); grp.add(grip);
-    p.armR.el.add(grp); g.userData.prop = grp;
+// Swing limbs for a walk cycle; phase advances with distance travelled.
+export function animatePerson(rec, dt) {
+  const parts = rec.group.userData.parts;
+  if (!parts) return;
+  const moving = rec.animSpeed > 0.15 && rec.state !== 'down';
+  rec.animPhase += dt * (moving ? rec.animSpeed * 3.4 : 0);
+  const sw = moving ? Math.sin(rec.animPhase) * 0.55 : 0;
+  parts.legL.rotation.x = sw;
+  parts.legR.rotation.x = -sw;
+  if (rec.state === 'attack') {
+    parts.armR.rotation.x = -2.1 + Math.sin(rec.animPhase * 3) * 0.5;
+    parts.armL.rotation.x = 0.3;
+  } else {
+    parts.armL.rotation.x = -sw * 0.8;
+    parts.armR.rotation.x = sw * 0.8;
   }
-  return g;
+  if (rec.state === 'down') {
+    rec.group.rotation.x = -Math.PI / 2;
+    rec.group.position.y = 0.25;
+  } else if (rec.group.rotation.x !== 0) {
+    rec.group.rotation.x = 0;
+    rec.group.position.y = 0;
+  }
+  if (rec.crouchVisual) rec.group.scale.y = (rec.baseScale || 1) * 0.72;
+  else if (rec.group.scale.y !== (rec.baseScale || 1)) rec.group.scale.y = rec.baseScale || 1;
 }
 
-// A soft blob shadow disc (used under animals and as a grounding aid).
-export function blobShadow(r = 0.5, opacity = 0.32) {
-  const m = new THREE.Mesh(
-    new THREE.CircleGeometry(r, 14),
-    new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity, depthWrite: false }),
-  );
-  m.rotation.x = -Math.PI / 2;
-  m.position.y = 0.03;
-  return m;
+// Create the data record for a person. Children deliberately get NO
+// health property at all - not zero, not undefined: absent.
+export function makePersonRecord(kind, group, x, z) {
+  const rec = {
+    kind, group,
+    x, z, heading: Math.random() * Math.PI * 2,
+    speed: 0, animSpeed: 0, animPhase: Math.random() * 6,
+    state: 'wander',           // wander | flee | hostile | attack | down | stand
+    tx: x, tz: z,               // current wander target
+    retargetT: Math.random() * 4,
+    downT: 0, hostileT: 0,
+    baseScale: group.scale.x,
+    crouchVisual: false,
+    armed: false,
+  };
+  if (kind !== 'child') rec.health = kind === 'thug' ? 36 : 30;
+  return rec;
 }
 
-// Pose a fallen body: lying flat, limbs loose. Used for knocked-out NPCs.
-export function poseFallen(g) {
-  const p = g.userData.parts;
-  g.rotation.x = -Math.PI / 2 + 0.06;
-  p.armL.sh.rotation.z = 1.2; p.armR.sh.rotation.z = -0.7;
-  p.legL.hip.rotation.x = 0.14; p.legR.hip.rotation.x = -0.1;
-  return g;
+// A small quadruped: body, head, ears, tail - dogs and cats of the bay.
+export function makeAnimal(x, z) {
+  const g = new THREE.Group();
+  const fur = pick([0xb08954, 0x6e5136, 0xd8d3c3, 0x3a3a3a, 0xc96f2e]);
+  const mat = new THREE.MeshLambertMaterial({ color: fur });
+  const body = limb(0.72, 0.4, 0.34, mat, 0, 0.48, 0);
+  const head = limb(0.3, 0.3, 0.3, mat, 0.48, 0.62, 0);
+  const earL = limb(0.08, 0.16, 0.08, mat, 0.42, 0.84, 0.09);
+  const earR = limb(0.08, 0.16, 0.08, mat, 0.42, 0.84, -0.09);
+  const tail = limb(0.3, 0.08, 0.08, mat, -0.48, 0.62, 0);
+  tail.rotation.z = 0.7;
+  g.add(body, head, earL, earR, tail);
+  for (const [lx, lz] of [[0.24, 0.11], [0.24, -0.11], [-0.24, 0.11], [-0.24, -0.11]]) {
+    g.add(limb(0.09, 0.34, 0.09, mat, lx, 0.17, lz));
+  }
+  g.position.set(x, 0, z);
+  const rec = {
+    kind: 'animal', group: g, x, z,
+    heading: Math.random() * Math.PI * 2,
+    speed: 0, animSpeed: 0, animPhase: 0,
+    state: 'wander', tx: x, tz: z, retargetT: Math.random() * 5,
+    downT: 0, hostileT: 0, baseScale: 1, crouchVisual: false, armed: false,
+  };
+  rec.health = 10; // animals scatter when scared; they are never a target
+  return rec;
 }
 
-// Pose a human. state: { mode, phase, speed01, crouch01, attackT, attackKind, aim }
-export function poseHuman(g, st, dt) {
-  const p = g.userData.parts;
-  const t = st.time || 0;
-  const sw = Math.sin(st.phase || 0);
-  const sw2 = Math.sin((st.phase || 0) + Math.PI);
-  const amp = 0.25 + 0.55 * (st.speed01 || 0);
-  let hipY = g.userData.baseHipY;
-  // legs swing opposite, knees bend on the lifting leg
-  p.legL.hip.rotation.x = sw * amp * (st.moving ? 1 : 0);
-  p.legR.hip.rotation.x = sw2 * amp * (st.moving ? 1 : 0);
-  p.legL.knee.rotation.x = Math.max(0, -sw2) * 0.9 * (st.moving ? 1 : 0) + (st.moving ? 0.08 : 0);
-  p.legR.knee.rotation.x = Math.max(0, -sw) * 0.9 * (st.moving ? 1 : 0) + (st.moving ? 0.08 : 0);
-  // arms swing opposite to legs; idle breathing
-  const breathe = Math.sin(t * 1.7) * 0.03;
-  p.armL.sh.rotation.x = sw2 * amp * 0.8 * (st.moving ? 1 : 0) + breathe;
-  p.armR.sh.rotation.x = sw * amp * 0.8 * (st.moving ? 1 : 0) - breathe;
-  p.armL.el.rotation.x = -0.25 - (st.moving ? 0.3 : 0);
-  p.armR.el.rotation.x = -0.25 - (st.moving ? 0.3 : 0);
-  p.armL.sh.rotation.z = 0.08; p.armR.sh.rotation.z = -0.08;
-  p.hips.rotation.x = (st.moving ? 0.06 + 0.08 * (st.speed01 || 0) : 0.01);
-  p.headG.rotation.y = Math.sin(t * 0.4) * 0.06;
-  p.headG.rotation.x = 0;
+// A held prop (crate, bag, baton) parented to the right hand.
+export function attachProp(rec, mesh) {
+  const parts = rec.group.userData.parts;
+  if (!parts) return;
+  mesh.position.set(0, -0.62, 0.12);
+  parts.armR.add(mesh);
+  rec.prop = mesh;
+}
 
-  if (st.mode === 'crouch') {
-    hipY -= 0.34;
-    p.legL.hip.rotation.x = -1.5; p.legR.hip.rotation.x = -0.4;
-    p.legL.knee.rotation.x = 1.9; p.legR.knee.rotation.x = 1.5;
-    p.hips.rotation.x = 0.42;
-    p.armL.sh.rotation.x = -0.5; p.armR.sh.rotation.x = -0.5;
-    p.headG.rotation.x = -0.25;
-  } else if (st.mode === 'jump') {
-    p.legL.hip.rotation.x = -0.55; p.legR.hip.rotation.x = 0.3;
-    p.legL.knee.rotation.x = 0.8; p.legR.knee.rotation.x = 0.5;
-    p.armL.sh.rotation.x = -0.7; p.armR.sh.rotation.x = -0.7;
-  } else if (st.mode === 'drive') {
-    hipY -= 0.42;
-    p.legL.hip.rotation.x = -1.35; p.legR.hip.rotation.x = -1.35;
-    p.legL.knee.rotation.x = 1.25; p.legR.knee.rotation.x = 1.25;
-    p.armL.sh.rotation.x = -0.95; p.armR.sh.rotation.x = -0.95;
-    p.armL.el.rotation.x = -0.25; p.armR.el.rotation.x = -0.25;
-    p.armL.sh.rotation.z = 0.35; p.armR.sh.rotation.z = -0.35;
-    p.hips.rotation.x = 0.05;
-  }
-  // attacks overlay on the right arm / right leg
-  const at = st.attackT || 0;
-  if (at > 0 && st.attackKind === 'punch') {
-    const k = Math.sin(Math.min(1, 1 - at / 0.22) * Math.PI);
-    p.armR.sh.rotation.x = -1.5 * k - 0.2;
-    p.armR.el.rotation.x = -0.15 * (1 - k);
-    p.hips.rotation.y = 0.3 * k;
-  } else if (at > 0 && st.attackKind === 'baton') {
-    const k = Math.sin(Math.min(1, 1 - at / 0.3) * Math.PI);
-    p.armR.sh.rotation.x = -2.2 * k + 0.4;
-    p.armR.el.rotation.x = -0.4 * (1 - k);
-    p.hips.rotation.y = 0.35 * k;
-  } else if (at > 0 && st.attackKind === 'kick') {
-    const k = Math.sin(Math.min(1, 1 - at / 0.4) * Math.PI);
-    p.legR.hip.rotation.x = -1.6 * k;
-    p.legR.knee.rotation.x = 0.25 * (1 - k);
-    p.hips.rotation.y = -0.25 * k;
-    hipY -= 0.03 * k;
-  } else if (st.mode !== 'drive') {
-    p.hips.rotation.y *= 0.8;
-  }
-  if (st.aim) { // pistol: both arms forward, steady
-    p.armR.sh.rotation.x = -1.45; p.armR.el.rotation.x = -0.06;
-    p.armL.sh.rotation.x = -1.3; p.armL.el.rotation.x = -0.35;
-    p.headG.rotation.x = 0.05;
-  }
-  p.hips.position.y = hipY + (st.moving ? Math.abs(Math.cos(st.phase || 0)) * 0.045 : Math.sin(t * 1.7) * 0.008);
-  return g;
+export function animateAnimal(rec, dt) {
+  rec.animPhase += dt * 6 * (rec.animSpeed > 0.1 ? 1 : 0);
+  rec.group.position.y = rec.animSpeed > 0.1 ? Math.abs(Math.sin(rec.animPhase)) * 0.05 : 0;
 }

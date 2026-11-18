@@ -1,123 +1,153 @@
-// Wanted model — WITNESS based, with the house rules layered on top:
-//  * a crime nobody sees never raises wanted;
-//  * the first seen crime is EXACTLY 1 star;
-//  * a continuing incident (within ~3.5 s and the same area) counts as ONE;
-//  * +1 per new incident, at least 6 s between raises, never +2 from one act;
-//  * 5 stars only by pressure escalation (kept in police sight at >=3 stars:
-//    +1 per ~30 s, max 5);
-//  * stars fall one at a time while unseen — crouching hidden falls faster;
-//  * an unseen vehicle change / safehouse clothes change clears the matching
-//    description (face / vehicle) and speeds the cooldown.
-import { CFG } from './config.js';
+// PURNAMA BAY - the wanted model. Stars are earned ONLY through witnessed
+// crime, never granted directly:
+//  - an unseen crime raises nothing;
+//  - the first witnessed crime of an incident is exactly one star;
+//  - a continuing incident (inside the window, same area) counts once;
+//  - each genuinely new incident, after the raise cooldown, adds exactly
+//    one star - the level can never jump by two;
+//  - at 3+ stars, staying visible under pressure for a long stretch adds
+//    one more star at a time;
+//  - unseen, stars decay one at a time - faster crouched, still and hidden;
+//  - an unseen vehicle swap or a safehouse clothes change clears the
+//    police description (knownFace / knownVehicle).
+import { S, CFG, dist2d } from './config.js';
 
-export function createWanted(onChange) {
-  const w = {
-    stars: 0,
-    knownFace: false,       // police know what the player looks like
-    knownVehicle: false,    // police know the player's current vehicle
-    now: 0,
-    lastIncidentT: -99,
-    lastIncidentPos: { x: 0, z: 0 },
-    lastRaiseT: -99,
-    lastSeenPos: null,      // last place police actually saw the player
-    seenByPolice: false,
-    escT: 0,
-    decayT: 0,
-    crimesSeen: 0,
-    crimesUnseen: 0,
+export const W = {
+  stars: 0,
+  knownFace: false,
+  knownVehicle: false,
+  seenByPolice: false,
+  crimesSeen: 0,
+  crimesUnseen: 0,
+  incidentStart: -100,
+  incidentX: 0, incidentZ: 0,
+  lastSeenX: 0, lastSeenZ: 0,
+  lastRaise: -100,
+  lastSeen: -100,
+  unseenFor: 0,
+  pressureFor: 0,
+  vehiclePlate: '',
+};
+
+export function wantedSnapshot() {
+  return {
+    stars: W.stars,
+    knownFace: W.knownFace,
+    knownVehicle: W.knownVehicle,
+    seenByPolice: W.seenByPolice,
+    crimesSeen: W.crimesSeen,
+    crimesUnseen: W.crimesUnseen,
+    now: S.time,
+    sinceIncident: S.time - W.incidentStart,
+    sinceRaise: S.time - W.lastRaise,
   };
-  function setStars(n) {
-    n = Math.max(0, Math.min(5, n));
-    if (n !== w.stars) {
-      w.stars = n;
-      if (onChange) onChange(n);
-    }
+}
+
+// Is there a witness for a crime committed at (x, z)? Adults nearby count,
+// the victim included; children never count and are never involved; a
+// police unit nearby also sees it.
+export function crimeIsWitnessed(x, z, victim) {
+  for (const n of S.npcs) {
+    if (n.kind === 'child' || n.kind === 'animal' || n.state === 'down') continue;
+    if (dist2d(x, z, n.x, n.z) <= CFG.witnessRadius) return true;
   }
-  // The one and only door into wanted. Gameplay crime and the probe's
-  // spawnWitnessCrime() both call exactly this.
-  w.reportCrime = function ({ x, z, civilianWitnesses = 0, policeWitness = false, inVehicle = false }) {
-    const witnessed = policeWitness || civilianWitnesses > 0;
-    if (!witnessed) { w.crimesUnseen++; return { raised: false, unseen: true, stars: w.stars }; }
-    w.crimesSeen++;
-    if (inVehicle) w.knownVehicle = true; else w.knownFace = true;
-    w.lastSeenPos = { x, z };
-    const sinceIncident = w.now - w.lastIncidentT;
-    const nearIncident = Math.hypot(x - w.lastIncidentPos.x, z - w.lastIncidentPos.z) < CFG.incidentRadius;
-    if (sinceIncident < CFG.incidentWindow && nearIncident) {
-      return { raised: false, sameIncident: true, stars: w.stars };
-    }
-    w.lastIncidentT = w.now;
-    w.lastIncidentPos = { x, z };
-    if (w.now - w.lastRaiseT < CFG.raiseCooldown) {
-      return { raised: false, coolingDown: true, stars: w.stars };
-    }
-    if (w.stars < 5) {
-      setStars(w.stars + 1); // exactly +1, always — never more from one act
-      w.lastRaiseT = w.now;
-      w.decayT = 0;
-      return { raised: true, stars: w.stars };
-    }
-    return { raised: false, stars: w.stars };
-  };
-  w.update = function (dt, { seenByPolice, hidden }) {
-    w.now += dt;
-    w.seenByPolice = seenByPolice;
-    if (w.stars === 0) { w.escT = 0; w.decayT = 0; return; }
-    if (seenByPolice) {
-      w.decayT = 0;
-      if (w.stars >= 3 && w.stars < 5) {
-        w.escT += dt;
-        if (w.escT >= CFG.escalationInterval) {
-          w.escT = 0;
-          setStars(w.stars + 1);
-          w.lastRaiseT = w.now;
-        }
-      } else w.escT = 0;
-    } else {
-      w.escT = 0;
-      const interval = hidden ? CFG.decayIntervalHidden : CFG.decayInterval;
-      w.decayT += dt;
-      if (w.decayT >= interval) {
-        w.decayT = 0;
-        setStars(w.stars - 1); // one at a time
-        if (w.stars === 0) { w.knownFace = false; w.knownVehicle = false; }
+  if (victim && victim.kind !== 'child' && victim.kind !== 'animal') return true;
+  for (const u of S.policeUnits) {
+    if (dist2d(x, z, u.x, u.z) <= CFG.policeSeeRadius) return true;
+  }
+  return false;
+}
+
+// Report a crime through the one pipeline every crime uses.
+// Returns {seen, raised}.
+export function reportCrime(x, z, victim) {
+  const seen = crimeIsWitnessed(x, z, victim);
+  if (!seen) {
+    W.crimesUnseen++;
+    S.stats.crimesUnseen++;
+    return { seen: false, raised: false };
+  }
+  W.crimesSeen++;
+  S.stats.crimesSeen++;
+  W.lastSeen = S.time;
+  W.lastSeenX = x;
+  W.lastSeenZ = z;
+  if (S.inCar && S.currentCar) { W.knownVehicle = true; W.vehiclePlate = S.currentCar.model; }
+  else W.knownFace = true;
+  const inIncident = (S.time - W.incidentStart) <= CFG.incidentWindow
+    && dist2d(x, z, W.incidentX, W.incidentZ) <= 26;
+  if (inIncident) return { seen: true, raised: false };
+  W.incidentStart = S.time; W.incidentX = x; W.incidentZ = z;
+  if (S.time - W.lastRaise < CFG.raiseCooldown) return { seen: true, raised: false };
+  if (W.stars >= 5) return { seen: true, raised: false };
+  W.stars += 1;
+  W.lastRaise = S.time;
+  W.unseenFor = 0;
+  return { seen: true, raised: true };
+}
+
+// Is the player currently visible to the law (police close, or committing
+// in front of witnesses while wanted)?
+export function playerIsSeen() {
+  const p = S.p;
+  for (const u of S.policeUnits) {
+    if (dist2d(p.x, p.z, u.x, u.z) <= CFG.policeSeeRadius) return true;
+  }
+  return false;
+}
+
+export function updateWanted(dt) {
+  const seen = playerIsSeen();
+  W.seenByPolice = seen;
+  if (seen) {
+    W.lastSeen = S.time;
+    W.lastSeenX = S.p.x;
+    W.lastSeenZ = S.p.z;
+    W.unseenFor = 0;
+    if (W.stars >= 3) {
+      W.pressureFor += dt;
+      if (W.pressureFor >= CFG.pressureEvery && W.stars < 5 && S.time - W.lastRaise >= CFG.raiseCooldown) {
+        W.stars += 1;
+        W.lastRaise = S.time;
+        W.pressureFor = 0;
       }
     }
-  };
-  // Disguise: unseen vehicle swap clears the vehicle description; changing
-  // clothes at the safehouse clears the face description. Both speed cooling.
-  w.clearVehicleDescription = function () {
-    if (w.knownVehicle) { w.knownVehicle = false; w.decayT += 4; }
-  };
-  w.clearFaceDescription = function () {
-    if (w.knownFace) { w.knownFace = false; w.decayT += 4; }
-  };
-  // Search state for the HUD/minimap: police hunt the last seen position and
-  // the ring shrinks as the cooldown progresses.
-  w.searchInfo = function () {
-    if (w.stars === 0 || !w.lastSeenPos) return null;
-    const interval = CFG.decayInterval;
-    const progress = Math.min(1, w.decayT / interval);
-    return {
-      x: w.lastSeenPos.x, z: w.lastSeenPos.z,
-      radius: CFG.searchRadius * (1 - progress * 0.55),
-      progress,
-      seen: w.seenByPolice,
-    };
-  };
-  // Snapshot for the debug hook / HUD (plain data, no live references).
-  w.snapshot = function () {
-    return {
-      stars: w.stars, knownFace: w.knownFace, knownVehicle: w.knownVehicle,
-      seenByPolice: w.seenByPolice, crimesSeen: w.crimesSeen, crimesUnseen: w.crimesUnseen,
-      now: Math.round(w.now * 10) / 10, sinceIncident: Math.round((w.now - w.lastIncidentT) * 10) / 10,
-      sinceRaise: Math.round((w.now - w.lastRaiseT) * 10) / 10,
-    };
-  };
-  w.clearAll = function () { // busted / served: slate wiped
-    setStars(0);
-    w.knownFace = false; w.knownVehicle = false;
-    w.escT = 0; w.decayT = 0; w.lastSeenPos = null;
-  };
-  return w;
+  } else {
+    W.pressureFor = 0;
+    if (W.stars > 0) {
+      W.unseenFor += dt;
+      const hiddenStill = S.p.crouch && !S.p.moving && !S.inCar;
+      const need = hiddenStill ? CFG.decayCrouch : CFG.decayStand;
+      if (W.unseenFor >= need) {
+        W.stars -= 1;
+        W.unseenFor = 0;
+        if (W.stars === 0) { W.knownFace = false; W.knownVehicle = false; }
+      }
+    }
+  }
+}
+
+// An unseen change of vehicle breaks the vehicle description.
+export function noteVehicleSwap(car) {
+  if (!playerIsSeen() && W.knownVehicle && car && car.model !== W.vehiclePlate) {
+    W.knownVehicle = false;
+  }
+}
+
+// Changing clothes at the safehouse breaks the face description.
+export function noteClothesChange() {
+  if (!playerIsSeen()) W.knownFace = false;
+}
+
+// Seconds of grace left before the next decay step lands (HUD flavour).
+export function decayProgress() {
+  if (W.stars <= 0) return 1;
+  const hiddenStill = S.p.crouch && !S.p.moving && !S.inCar;
+  const need = hiddenStill ? CFG.decayCrouch : CFG.decayStand;
+  return Math.min(1, W.unseenFor / need);
+}
+
+export function clearWanted() {
+  W.stars = 0; W.knownFace = false; W.knownVehicle = false;
+  W.unseenFor = 0; W.pressureFor = 0;
 }

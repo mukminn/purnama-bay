@@ -1,188 +1,175 @@
-// HUD: objective panel, wanted stars + "police know" icons, big health bar,
-// money, numbered weapon slots with locks and ammo, police response panel,
-// vehicle name/condition/speedometer, portrait dialog, toasts, shop panel —
-// and the round minimap with the shrinking search ring and blips.
-import { CFG, WEAPON_SLOTS } from './config.js';
-import { portraitDataURL } from './textures.js';
+// PURNAMA BAY - the HUD: status box, objective line, wanted stars, the
+// circular minimap, the contextual prompt, Mira's dialog box and the
+// PURNAMA ARMS shop panel. Pure DOM + one 2D canvas; no framework.
+import { S, CFG } from './config.js';
+import { drawPortrait } from './textures.js';
+import { W } from './wanted.js';
 
-const $ = (id) => document.getElementById(id);
+const el = {};
+let minimapTarget = null;
+let lastMoney = -1; let lastHealth = -1; let lastStars = -1; let lastWeapon = '';
 
-export function createHUD(handlers) {
-  const els = {
-    hud: $('hud'), objTitle: $('obj-title'), objText: $('obj-text'), objSub: $('obj-sub'),
-    stars: $('stars'), know: $('know-icons'), health: $('health-fill'), money: $('money'),
-    slots: $('slots'), ammo: $('ammo'), policeList: $('police-list'),
-    arrestWrap: $('arrest-wrap'), arrestFill: $('arrest-fill'),
-    vehBox: $('vehicle-box'), speedo: $('speedo'), vehName: $('veh-name'), vehCond: $('veh-cond'),
-    prompt: $('prompt'), crosshair: $('crosshair'), hitmarker: $('hitmarker'),
-    dialog: $('dialog'), dlgName: $('dlg-name'), dlgText: $('dlg-text'),
-    toast: $('toast'), shop: $('shop'), shopBal: $('shop-bal'), shopMsg: $('shop-msg'),
-    minimap: $('minimap'), vignette: $('dmg-vignette'), markerLabel: $('marker-label'),
-  };
-  $('dlg-portrait').src = portraitDataURL();
-  // build weapon slots once
-  els.slots.innerHTML = WEAPON_SLOTS.map((s, i) =>
-    `<div class="slot" data-slot="${s.id}"><b>${i}</b> ${s.label}<span class="lock"></span></div>`).join('');
-  const slotEls = [...els.slots.querySelectorAll('.slot')];
+export function setMinimapTarget(t) { minimapTarget = t; }
 
-  let toastTimer = 0;
-  let dialogQueue = null, dialogDone = null;
-
-  function showToast(msg, seconds = 2.6) {
-    els.toast.textContent = msg;
-    els.toast.style.opacity = '1';
-    clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => { els.toast.style.opacity = '0'; }, seconds * 1000);
+export function initHUD(hooks) {
+  for (const id of ['objective', 'status-box', 'minimap', 'minimap-wrap', 'prompt',
+    'hud-money', 'hud-health-fill', 'hud-stars', 'hud-weapon',
+    'dialog', 'dialog-name', 'dialog-text', 'dialog-portrait', 'dialog-next',
+    'shop', 'shop-msg', 'shop-money', 'banner']) {
+    el[id] = document.getElementById(id);
   }
-
-  function nextDialog() {
-    if (!dialogQueue) return;
-    const line = dialogQueue.shift();
-    if (!line) {
-      els.dialog.style.display = 'none';
-      const done = dialogDone; dialogQueue = null; dialogDone = null;
-      if (done) done();
-      return;
-    }
-    els.dlgName.textContent = line.who === 'Mira' ? 'Mira Santoso' : line.who;
-    els.dlgText.textContent = line.text;
-    els.dialog.style.display = 'block';
-    els.dialog.classList.remove('fade-in'); void els.dialog.offsetWidth; els.dialog.classList.add('fade-in');
-    if (handlers.onDialogLine) handlers.onDialogLine();
-  }
-
-  document.querySelectorAll('#shop [data-buy]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const res = handlers.onBuy(btn.dataset.buy);
-      els.shopMsg.textContent = res.msg;
-      els.shopMsg.style.color = res.ok ? '#8be26b' : '#ffb3a0';
-    });
+  el['dialog-next'].addEventListener('click', () => { hideDialog(); if (hooks && hooks.onDialog) hooks.onDialog(); });
+  document.querySelectorAll('[data-buy]').forEach((b) => {
+    b.addEventListener('click', () => { if (hooks && hooks.onBuy) hooks.onBuy(b.getAttribute('data-buy')); });
   });
-  $('shop-close').addEventListener('click', () => handlers.onShopClose());
+  const close = document.getElementById('shop-close');
+  if (close) close.addEventListener('click', () => closeShop());
+}
 
-  const mm = els.minimap.getContext('2d');
-  function drawMinimap(snap) {
-    const S = 316, C = S / 2, scale = S / 360;
-    mm.clearRect(0, 0, S, S);
-    mm.save();
-    mm.beginPath(); mm.arc(C, C, C - 2, 0, Math.PI * 2); mm.clip();
-    mm.fillStyle = '#274b35'; mm.fillRect(0, 0, S, S);
-    const wx = (x) => C + x * scale, wz = (z) => C + z * scale;
-    // water (south bay)
-    mm.fillStyle = '#14607f';
-    mm.fillRect(0, wz(CFG.waterZ), S, S - wz(CFG.waterZ));
-    mm.fillStyle = '#c9a66b';
-    mm.fillRect(0, wz(94), S, wz(CFG.waterZ) - wz(94));
-    // roads
-    mm.strokeStyle = '#3c4148'; mm.lineWidth = 9;
-    for (const x of [-60, 0, 60]) { mm.beginPath(); mm.moveTo(wx(x), wz(-100)); mm.lineTo(wx(x), wz(100)); mm.stroke(); }
-    for (const z of [-60, -10, 40, 80]) { mm.beginPath(); mm.moveTo(wx(-100), wz(z)); mm.lineTo(wx(100), wz(z)); mm.stroke(); }
-    // dock pier
-    mm.fillStyle = '#7a5a38'; mm.fillRect(wx(-47), wz(94), 34 * scale, 26 * scale);
-    // search ring
-    if (snap.search) {
-      mm.strokeStyle = snap.search.seen ? 'rgba(255,70,50,.95)' : 'rgba(255,190,60,.85)';
-      mm.lineWidth = 3;
-      mm.beginPath(); mm.arc(wx(snap.search.x), wz(snap.search.z), Math.max(6, snap.search.radius * scale), 0, Math.PI * 2); mm.stroke();
-      mm.fillStyle = 'rgba(255,80,50,.12)';
-      mm.beginPath(); mm.arc(wx(snap.search.x), wz(snap.search.z), Math.max(6, snap.search.radius * scale), 0, Math.PI * 2); mm.fill();
-    }
-    function blip(x, z, color, r = 5) {
-      mm.fillStyle = color;
-      mm.beginPath(); mm.arc(wx(x), wz(z), r, 0, Math.PI * 2); mm.fill();
-    }
-    blip(CFG.shopPos.x, CFG.shopPos.z, '#ff9f2e', 5); // shop
-    blip(CFG.safehouse.x, CFG.safehouse.z, '#7fd069', 5); // safehouse
-    if (snap.missionTarget) blip(snap.missionTarget.x, snap.missionTarget.z, '#ffd60a', 7);
-    for (const b of snap.policeBlips || []) blip(b.x, b.z, '#4da3ff', 4.5);
-    for (const b of snap.thugBlips || []) blip(b.x, b.z, '#ff5a4d', 4);
-    // player arrow
-    mm.save();
-    mm.translate(wx(snap.playerPos.x), wz(snap.playerPos.z));
-    mm.rotate(snap.playerHeading);
-    mm.fillStyle = '#ffffff';
-    mm.beginPath(); mm.moveTo(0, -9); mm.lineTo(6, 7); mm.lineTo(0, 3.5); mm.lineTo(-6, 7); mm.closePath(); mm.fill();
-    mm.restore();
-    mm.restore();
-    // rim
-    mm.strokeStyle = 'rgba(255,201,60,.55)'; mm.lineWidth = 3;
-    mm.beginPath(); mm.arc(C, C, C - 3, 0, Math.PI * 2); mm.stroke();
+export function setObjective(text) {
+  if (el.objective) el.objective.textContent = text || '';
+}
+
+export function showBanner(text) {
+  if (!el.banner) return;
+  el.banner.textContent = text;
+  el.banner.style.opacity = '1';
+  setTimeout(() => { el.banner.style.opacity = '0'; }, 2600);
+}
+
+export function showDialog(who, name, text) {
+  if (!el.dialog) return;
+  S.dialogOpen = true;
+  el.dialog.style.display = 'flex';
+  el['dialog-name'].textContent = name;
+  el['dialog-text'].textContent = text;
+  const c = el['dialog-portrait'];
+  const g = c.getContext('2d');
+  drawPortrait(g, who, c.width, c.height);
+}
+
+export function hideDialog() {
+  S.dialogOpen = false;
+  if (el.dialog) el.dialog.style.display = 'none';
+}
+
+export function setPrompt(text) {
+  S.prompt = text || '';
+  if (!el.prompt) return;
+  if (text) {
+    el.prompt.textContent = text;
+    el.prompt.style.display = 'block';
+  } else {
+    el.prompt.style.display = 'none';
   }
+}
 
-  // Objective marker label: distance to the current mission target, shown
-  // mid-screen so the player always knows where the gold blip sits.
-  function updateMarkerLabel(snap) {
-    if (snap.missionTarget && snap.mode !== 'menu') {
-      const d = Math.hypot(snap.playerPos.x - snap.missionTarget.x, snap.playerPos.z - snap.missionTarget.z);
-      els.markerLabel.textContent = `▼ OBJECTIVE — ${Math.round(d)} m`;
-      els.markerLabel.style.display = 'block';
-    } else els.markerLabel.style.display = 'none';
+export function openShop() {
+  S.shopOpen = true;
+  if (el.shop) el.shop.style.display = 'block';
+  refreshShop('');
+}
+
+export function closeShop() {
+  S.shopOpen = false;
+  if (el.shop) el.shop.style.display = 'none';
+}
+
+export function refreshShop(msg) {
+  if (el['shop-msg']) el['shop-msg'].textContent = msg || '';
+  if (el['shop-money']) el['shop-money'].textContent = `PB$ ${S.money}`;
+}
+
+export function updateHUD(weaponSnap) {
+  if (!el['hud-money']) return;
+  if (S.money !== lastMoney) {
+    lastMoney = S.money;
+    el['hud-money'].textContent = `PB$ ${S.money}`;
+    if (S.shopOpen) refreshShop(el['shop-msg'] ? el['shop-msg'].textContent : '');
   }
+  const hp = Math.max(0, Math.round(S.health));
+  if (hp !== lastHealth) {
+    lastHealth = hp;
+    el['hud-health-fill'].style.width = `${hp}%`;
+    el['hud-health-fill'].style.background = hp > 35 ? '#57c256' : '#d94f3d';
+  }
+  if (W.stars !== lastStars) {
+    lastStars = W.stars;
+    el['hud-stars'].textContent = W.stars > 0 ? '★'.repeat(W.stars) + '☆'.repeat(5 - W.stars) : '';
+  }
+  const wtxt = weaponSnap.active === 'pistol' ? `PISTOL · ${weaponSnap.ammo}` : weaponSnap.active.toUpperCase();
+  if (wtxt !== lastWeapon) {
+    lastWeapon = wtxt;
+    el['hud-weapon'].textContent = wtxt;
+  }
+  drawMinimap();
+}
 
-  return {
-    els,
-    showToast,
-    updateMarkerLabel,
-    showDialog(lines, done) { dialogQueue = [...lines]; dialogDone = done || null; nextDialog(); },
-    advanceDialog() { if (dialogQueue) nextDialog(); },
-    dialogOpen() { return !!dialogQueue; },
-    openShop(balance) {
-      els.shop.style.display = 'flex';
-      els.shopBal.textContent = `Balance: ${CFG.currency} ${balance}`;
-      els.shopMsg.textContent = '';
-    },
-    closeShop() { els.shop.style.display = 'none'; },
-    shopOpen() { return els.shop.style.display === 'flex'; },
-    refreshShopBalance(balance) { els.shopBal.textContent = `Balance: ${CFG.currency} ${balance}`; },
-    setPrompt(html) {
-      if (html) { els.prompt.innerHTML = html; els.prompt.style.display = 'block'; }
-      else els.prompt.style.display = 'none';
-    },
-    flashHitmarker() {
-      els.hitmarker.style.display = 'block';
-      setTimeout(() => { els.hitmarker.style.display = 'none'; }, 90);
-    },
-    damageFlash(strength = 0.55) {
-      els.vignette.style.boxShadow = `inset 0 0 90px rgba(220,30,20,${strength})`;
-      setTimeout(() => { els.vignette.style.boxShadow = 'inset 0 0 90px rgba(220,30,20,0)'; }, 130);
-    },
-    update(snap) {
-      els.objTitle.textContent = snap.missionTitle || 'PURNAMA BAY — FREE ROAM';
-      els.objText.textContent = snap.objective || 'Explore the bay. Work for Mira to earn PB$.';
-      els.objSub.textContent = snap.objectiveSub || '';
-      // stars: exactly the wanted level, lit gold
-      els.stars.innerHTML = [1, 2, 3, 4, 5].map((i) => `<span class="${i <= snap.wanted ? 'on' : ''}">★</span>`).join('');
-      const know = [];
-      if (snap.knownFace) know.push('POLICE KNOW YOUR FACE');
-      if (snap.knownVehicle) know.push('POLICE KNOW YOUR VEHICLE');
-      els.know.textContent = know.join(' · ');
-      els.health.style.width = `${Math.max(0, snap.health)}%`;
-      els.money.textContent = `${CFG.currency} ${snap.money}`;
-      slotEls.forEach((el, i) => {
-        const slot = WEAPON_SLOTS[i];
-        const owned = slot.id === 'fists' || snap.owned[slot.id];
-        el.classList.toggle('active', snap.activeWeapon === slot.id);
-        el.classList.toggle('locked', !owned);
-        el.querySelector('.lock').textContent = owned ? '' : '🔒 LOCKED';
-      });
-      els.ammo.textContent = snap.activeWeapon === 'pistol' ? `Ammo: ${snap.ammo}` : (snap.activeWeapon === 'baton' ? 'Melee — harbour issue' : 'Bare hands');
-      els.crosshair.style.display = snap.activeWeapon === 'pistol' && snap.mode === 'foot' ? 'block' : 'none';
-      if (snap.policePanel && snap.policePanel.length) {
-        els.policeList.innerHTML = snap.policePanel.map((u) => `${u.kind} — ${u.dist} m — ${u.status}`).join('<br>');
-      } else els.policeList.textContent = snap.wanted > 0 ? 'Units converging…' : 'No units dispatched';
-      if (snap.arresting) {
-        els.arrestWrap.style.display = 'block';
-        els.arrestFill.style.width = `${Math.round(snap.arrestProgress * 100)}%`;
-      } else els.arrestWrap.style.display = 'none';
-      if (snap.mode === 'car' && snap.vehicle) {
-        els.vehBox.style.display = 'block';
-        els.speedo.innerHTML = `${Math.round(Math.abs(snap.vehicle.speed) * 3.6)} <small>km/h</small>`;
-        els.vehName.textContent = snap.vehicle.name;
-        els.vehCond.style.width = `${Math.max(0, snap.vehicle.health)}%`;
-        els.vehCond.style.background = snap.vehicle.health > 55 ? '#7fd069' : snap.vehicle.health > 26 ? '#ffb020' : '#e33f2f';
-      } else els.vehBox.style.display = 'none';
-      updateMarkerLabel(snap);
-      drawMinimap(snap);
-    },
+// A one-line summary for the status box tooltip (money, heat, weapon).
+export function statusSummary(weaponSnap) {
+  return `PB$ ${S.money} · ${W.stars} star${W.stars === 1 ? '' : 's'} · ${weaponSnap.active}`;
+}
+
+// The minimap disc: sea to the north, sand, road grid, blocks, then the
+// living dots - player arrow centre-ish, mission gold, police red.
+function drawMinimap() {
+  const c = el.minimap;
+  if (!c) return;
+  const g = c.getContext('2d');
+  const size = c.width;
+  const half = size / 2;
+  const range = 95; // metres visible from centre to edge
+  const scale = half / range;
+  const px = S.p.x; const pz = S.p.z;
+  g.clearRect(0, 0, size, size);
+  g.save();
+  g.beginPath(); g.arc(half, half, half - 1, 0, Math.PI * 2); g.clip();
+  g.fillStyle = '#79a85b'; g.fillRect(0, 0, size, size);
+  // sea band (world north, z high)
+  const seaY = half - (148 - pz) * scale;
+  g.fillStyle = '#1d7fa8'; g.fillRect(0, 0, size, Math.max(0, seaY + 26 * scale));
+  g.fillStyle = '#e6cf9a'; g.fillRect(0, Math.max(0, seaY), size, 26 * scale);
+  // roads
+  g.strokeStyle = '#3c4147'; g.lineWidth = Math.max(2, 13 * scale);
+  for (const r of [-120, -80, -40, 0, 40, 80, 120]) {
+    const vx = half + (r - px) * scale;
+    g.beginPath(); g.moveTo(vx, 0); g.lineTo(vx, size); g.stroke();
+    const hz = half - (r - pz) * scale;
+    g.beginPath(); g.moveTo(0, hz); g.lineTo(size, hz); g.stroke();
+  }
+  // buildings as warm blocks
+  g.fillStyle = '#c9973f';
+  for (const b of S.colliders) {
+    const bx = half + ((b.minX + b.maxX) / 2 - px) * scale;
+    const bz = half - ((b.minZ + b.maxZ) / 2 - pz) * scale;
+    const bw = Math.max(2, (b.maxX - b.minX) * scale);
+    const bh = Math.max(2, (b.maxZ - b.minZ) * scale);
+    g.fillRect(bx - bw / 2, bz - bh / 2, bw, bh);
+  }
+  const dot = (x, z, color, r) => {
+    const dx = half + (x - px) * scale;
+    const dy = half - (z - pz) * scale;
+    if (dx < -4 || dy < -4 || dx > size + 4 || dy > size + 4) return;
+    g.fillStyle = color;
+    g.beginPath(); g.arc(dx, dy, r, 0, Math.PI * 2); g.fill();
   };
+  for (const car of S.cars) dot(car.x, car.z, car.isTarget ? '#ff9d2e' : '#d8d8d8', 2);
+  for (const n of S.npcs) if (n.kind === 'thug') dot(n.x, n.z, '#8c2e2e', 2);
+  for (const u of S.policeUnits) dot(u.x, u.z, '#ff3b30', 2.6);
+  if (minimapTarget) dot(minimapTarget.x, minimapTarget.z, '#ffd34d', 4);
+  dot(CFG.shopDoor.x, CFG.shopDoor.z, '#7ec8e3', 2.6);
+  // player arrow, rotated to heading (map north = world +z up)
+  g.translate(half, half);
+  g.rotate(-S.p.heading);
+  g.fillStyle = '#ffffff';
+  g.strokeStyle = '#1d2733';
+  g.beginPath(); g.moveTo(0, -6); g.lineTo(4.4, 5); g.lineTo(0, 2.4); g.lineTo(-4.4, 5); g.closePath();
+  g.fill(); g.stroke();
+  g.restore();
+  g.strokeStyle = 'rgba(20,30,40,0.65)'; g.lineWidth = 3;
+  g.beginPath(); g.arc(half, half, half - 2, 0, Math.PI * 2); g.stroke();
+  g.fillStyle = '#ffffff';
+  g.font = 'bold 11px system-ui, sans-serif';
+  g.textAlign = 'center';
+  g.fillText('N', half, 13);
 }
