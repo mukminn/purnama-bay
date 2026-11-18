@@ -164,6 +164,13 @@ export function shoot() {
 // weapon. Round 11 (P1-10): rings come from a small POOL - a picked-up
 // ring's mesh is hidden and reused for the next drop instead of a new
 // geometry/material being allocated for every felled thug.
+// Round 12: the pool alone did NOT bound S.drops - records accumulated
+// without limit, and when the pool ran dry spawnDrop stole dropPool[0],
+// a mesh another live record still pointed at (two records, one ring:
+// picking one up hid the other). Now S.drops is hard-capped at
+// CFG.maxDrops with oldest-first eviction, every drop ages out after
+// CFG.dropDespawnT seconds, and a mesh is only ever reused once its
+// owning record has been spliced out of S.drops.
 const dropGroup = new THREE.Group();
 let dropSceneReady = false;
 const dropPool = [];
@@ -171,10 +178,25 @@ export function initDrops(scene) {
   if (!dropSceneReady) { scene.add(dropGroup); dropSceneReady = true; }
 }
 
+// Return the drop at index i to the pool: hide its ring and SPLICE the
+// record out of S.drops. This is the single exit path for drops
+// (pickup, despawn and eviction all go through it).
+function releaseDropAt(i) {
+  const d = S.drops[i];
+  if (!d) return null;
+  if (d.mesh) d.mesh.visible = false; // ring returns to the pool
+  S.drops.splice(i, 1);
+  return d;
+}
+
 export function spawnDrop(weapon, x, z) {
+  // hard cap: evict the OLDEST live drops until there is room - their
+  // rings go back to the pool, so the mesh reuse below can never steal
+  // a ring that a live record still owns
+  while (S.drops.length >= CFG.maxDrops) releaseDropAt(0);
   const dropColor = weapon === 'pistol' ? 0xffd34d : (weapon === 'knife' ? 0x9fd4ff : (weapon === 'baton' ? 0xc9973f : 0x7ec8e3));
   let mesh = dropPool.find((m) => !m.visible);
-  if (!mesh && dropPool.length < 8) {
+  if (!mesh && dropPool.length < CFG.maxDrops) {
     const geo = new THREE.TorusGeometry(0.85, 0.09, 8, 24);
     const mat = new THREE.MeshStandardMaterial({ color: dropColor, emissive: dropColor, emissiveIntensity: 0.9, roughness: 0.4 });
     mesh = new THREE.Mesh(geo, mat);
@@ -182,12 +204,12 @@ export function spawnDrop(weapon, x, z) {
     dropGroup.add(mesh);
     dropPool.push(mesh);
   }
-  if (!mesh) mesh = dropPool[0];
+  if (!mesh) return null; // unreachable while the cap invariant holds
   mesh.material.color.setHex(dropColor);
   mesh.material.emissive.setHex(dropColor);
   mesh.position.set(x, 0.35, z);
   mesh.visible = true;
-  S.drops.push({ weapon, ammo: weapon === 'pistol' ? 12 : 0, x, z, mesh });
+  S.drops.push({ weapon, ammo: weapon === 'pistol' ? 12 : 0, x, z, mesh, age: 0 });
   return mesh;
 }
 
@@ -196,7 +218,12 @@ export function dropsInfo() {
 }
 
 export function updateDrops(dt) {
-  for (const d of S.drops) {
+  // backwards walk: a drop that outlives CFG.dropDespawnT despawns in
+  // place - record spliced from S.drops, ring hidden back into the pool
+  for (let i = S.drops.length - 1; i >= 0; i--) {
+    const d = S.drops[i];
+    d.age = (d.age || 0) + dt;
+    if (d.age >= CFG.dropDespawnT) { releaseDropAt(i); continue; }
     d.mesh.rotation.z += dt * 1.6;
     d.mesh.position.y = 0.35 + Math.sin(S.time * 3 + d.x) * 0.08;
   }
@@ -214,8 +241,7 @@ export function pickupDropAt(x, z) {
     if (dist2d(x, z, d.x, d.z) <= 2.1) {
       WPN.owned[d.weapon] = true;
       if (d.weapon === 'pistol') WPN.ammo += d.ammo;
-      d.mesh.visible = false; // back into the pool for the next drop
-      S.drops.splice(i, 1);
+      releaseDropAt(i); // ring back into the pool, record spliced out
       sfx.pickup();
       return d;
     }

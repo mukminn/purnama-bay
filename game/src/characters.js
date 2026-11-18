@@ -316,8 +316,19 @@ export function createBar(group) {
     const bl = Math.round(a[2] + (b[2] - a[2]) * t);
     return `rgb(${r},${g},${bl})`;
   }
+  let disposed = false;
   return {
     sprite,
+    // round 12: a bar must be able to leave the scene for good - when its
+    // owner dies or is removed, the sprite is detached from the group and
+    // its canvas texture + material are freed, not merely hidden.
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      if (sprite.parent) sprite.parent.remove(sprite);
+      tex.dispose();
+      mat.dispose();
+    },
     set(frac, visible) {
       const f = Math.max(0, Math.min(1, frac));
       if (Math.abs(f - lastFrac) <= 0.005 && visible === lastVisible) return;
@@ -334,6 +345,26 @@ export function createBar(group) {
       tex.needsUpdate = true;
     },
   };
+}
+
+// Round 12: free a removed person's GPU resources. Every mesh geometry
+// in a person group is unique to that person (merged at build time), so
+// geometries are disposed; sprite textures/materials (the HP bar) are
+// unique too and are disposed. Materials of ordinary meshes are NOT
+// disposed here: the merged core shares the module-level coloredStandard
+// material with every other person still alive.
+export function disposePersonGroup(group) {
+  if (!group) return;
+  group.traverse((o) => {
+    if (o.isSprite) {
+      if (o.material) {
+        if (o.material.map) o.material.map.dispose();
+        o.material.dispose();
+      }
+    } else if (o.isMesh && o.geometry) {
+      o.geometry.dispose();
+    }
+  });
 }
 
 // A small hand-held weapon prop (bat / knife / pistol) for the right hand.

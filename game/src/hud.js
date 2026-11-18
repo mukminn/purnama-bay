@@ -38,8 +38,17 @@ export function showHitMarker() {
 const floaters = [];
 let floaterProjector = null;
 export function setFloaterProjector(fn) { floaterProjector = fn; }
+// Round 12: live floater counts for the debug hook - the pool is fixed
+// at CFG.maxFloaters nodes, created once in initHUD, and a node is
+// deactivated (display:none) the frame its animation lifetime ends.
+export function floatersInfo() {
+  return { active: floaters.filter((f) => f.active).length, pooled: floaters.length };
+}
 export function floatText(x, z, text, color) {
-  const f = floaters.find((k) => !k.active) || floaters[0];
+  // free node first; if the whole pool is busy, steal the OLDEST active
+  // floater (earliest born), never allocate a new node
+  let f = floaters.find((k) => !k.active);
+  if (!f) for (const k of floaters) if (!f || k.born < f.born) f = k;
   if (!f) return;
   f.active = true;
   f.x = x; f.z = z;
@@ -124,7 +133,7 @@ export function initHUD(hooks) {
   // recycled for damage numbers and PB$ gains, never allocated per event
   const hudRoot = document.getElementById('hud');
   if (hudRoot && !floaters.length) {
-    for (let i = 0; i < 12; i++) {
+    for (let i = 0; i < CFG.maxFloaters; i++) {
       const d = document.createElement('div');
       d.className = 'floater';
       d.style.display = 'none';

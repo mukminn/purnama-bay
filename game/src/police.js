@@ -4,7 +4,7 @@
 // wanted model's sight radius, and they stand down when the stars are gone.
 import * as THREE from 'three';
 import { S, CFG, dist2d, pushOut, pushOutCars, clamp, pointBlocked } from './config.js';
-import { makePerson, animatePerson } from './characters.js';
+import { makePerson, animatePerson, disposePersonGroup } from './characters.js';
 import { W } from './wanted.js';
 import { sfx } from './audio.js';
 
@@ -43,10 +43,13 @@ function desiredUnits() {
 
 export function updatePolice(scene, dt) {
   const want = desiredUnits();
-  // stand down: remove units when the heat is gone
+  // stand down: remove units when the heat is gone. Round 12: the
+  // unit's geometries are disposed too - units are rebuilt fresh on
+  // every response, so without this each stand-down leaked a body.
   while (S.policeUnits.length > want) {
     const u = S.policeUnits.pop();
     scene.remove(u.group);
+    disposePersonGroup(u.group);
   }
   while (S.policeUnits.length < want) {
     // units respond to the scene of the crime (the last place the player

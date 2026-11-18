@@ -80,6 +80,17 @@ export const CFG = {
   dayCycle: 300,
   hardHitSpeed: 8.5,       // impact speed (m/s) that counts as a HARD hit
   hardHitsToExplode: 10,
+  // round 12: accumulation cleanup - every temporary entity in the game
+  // carries BOTH a count cap and a lifetime, and on expiry it is removed
+  // from the three.js scene AND spliced from its JS array (never just
+  // hidden). These are the only numbers the cleanup paths read.
+  maxDrops: 6,               // live weapon-drop rings at once (drop pool size too)
+  dropDespawnT: 45,          // seconds a drop ring waits before it despawns
+  maxCorpses: 6,             // dead adult bodies kept in the world at once
+  corpseT: 25,               // seconds a dead body stays before it is removed
+  maxFloaters: 12,           // pooled floating-text DOM nodes (hud.js)
+  maxExplosionFx: 4,         // pooled explosion bursts (vehicles.js)
+  explosionParticles: 70,    // fixed particle buffer size per pooled burst
   // presentation
   cityName: 'PURNAMA BAY',
   heroName: 'Raka Pradana',

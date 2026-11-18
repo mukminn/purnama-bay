@@ -319,28 +319,40 @@ export function explodeCar(car) {
   }
 }
 
+// Round 12 audit of the round-11 pool: the pool was already capped and
+// its position buffer already fixed-size, but (a) every burst allocated
+// CFG.explosionParticles fresh velocity arrays, and (b) stealing an
+// active burst left the previous car's fx field pointing at it, so two
+// cars animated (and expired) one burst. Velocities are now preallocated
+// once per pooled burst and rewritten in place, and a steal first clears
+// the previous owner's fx reference.
 const FX_POOL = [];
-const FX_PARTICLES = 70;
 function spawnExplosionFx(parent, x, z) {
   let fx = FX_POOL.find((f) => !f.active);
-  if (!fx && FX_POOL.length < 4) {
+  if (!fx && FX_POOL.length < CFG.maxExplosionFx) {
     const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(FX_PARTICLES * 3), 3));
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(CFG.explosionParticles * 3), 3));
     const mat = new THREE.PointsMaterial({ color: 0xff7a26, size: 0.55, transparent: true, opacity: 1 });
     const points = new THREE.Points(geo, mat);
     points.name = 'explosion-fx';
     const light = new THREE.PointLight(0xff7a26, 60, 17, 1.8);
-    fx = { points, light, vel: [], t: 0, active: false };
+    const vel = [];
+    for (let i = 0; i < CFG.explosionParticles; i++) vel.push([0, 0, 0]);
+    fx = { points, light, vel, t: 0, active: false };
     FX_POOL.push(fx);
   }
-  if (!fx) fx = FX_POOL[0]; // pool exhausted: steal the oldest burst
+  if (!fx) {
+    fx = FX_POOL[0]; // pool exhausted: steal the oldest burst
+    for (const c of S.cars) if (c.fx === fx) c.fx = null; // old owner lets go
+  }
   if (fx.points.parent !== parent && parent) { parent.add(fx.points); parent.add(fx.light); }
   const pos = fx.points.geometry.attributes.position;
-  fx.vel.length = 0;
-  for (let i = 0; i < FX_PARTICLES; i++) {
+  for (let i = 0; i < CFG.explosionParticles; i++) {
     pos.array[i * 3] = x; pos.array[i * 3 + 1] = 0.8; pos.array[i * 3 + 2] = z;
     const a = Math.random() * Math.PI * 2;
-    fx.vel.push([Math.sin(a) * (1 + Math.random() * 2.4), 2.4 + Math.random() * 3.6, Math.cos(a) * (1 + Math.random() * 2.4)]);
+    fx.vel[i][0] = Math.sin(a) * (1 + Math.random() * 2.4);
+    fx.vel[i][1] = 2.4 + Math.random() * 3.6;
+    fx.vel[i][2] = Math.cos(a) * (1 + Math.random() * 2.4);
   }
   pos.needsUpdate = true;
   fx.points.material.color.setHex(0xff7a26);
@@ -370,7 +382,13 @@ export function updateVehicleFx(dt) {
     fx.points.material.color.setHex(fx.t < 0.7 ? 0xff7a26 : 0x555049); // flame -> smoke
     fx.points.material.opacity = Math.max(0, 1 - fx.t / 2.6);
     fx.light.intensity = Math.max(0, 60 * (1 - fx.t / 1.4));
-    if (fx.t > 2.6) { fx.active = false; fx.points.visible = false; fx.light.intensity = 0; }
+    if (fx.t > 2.6) {
+      // lifetime over: burst goes dark and inactive back into the pool,
+      // and the car stops referencing it - no live effect object is
+      // left hanging off a wreck forever
+      fx.active = false; fx.points.visible = false; fx.light.intensity = 0;
+      if (car.fx === fx) car.fx = null;
+    }
   }
 }
 

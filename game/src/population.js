@@ -3,7 +3,7 @@
 // and the bay's dogs and cats. Counts are the game's census targets.
 import * as THREE from 'three';
 import { S, CFG, dist2d, pushOut, pushOutCars, clamp } from './config.js';
-import { makePerson, makePersonRecord, makeAnimal, animatePerson, animateAnimal, attachProp, makeWeaponProp, createBar } from './characters.js';
+import { makePerson, makePersonRecord, makeAnimal, animatePerson, animateAnimal, attachProp, makeWeaponProp, createBar, disposePersonGroup } from './characters.js';
 import { PLACES, ROAD_LINES, SIDEWALK_OFFSET, isRoad, isSidewalk, inPark, PARK, groundYAt, WX } from './world.js';
 import { reportCrime } from './wanted.js';
 import { sfx } from './audio.js';
@@ -226,14 +226,78 @@ function designateSocial(scene) {
   });
 }
 
+// ------------------------------------------------------------------
+// Round 12 corpse cleanup. A dead adult body no longer stays forever:
+// it is removed after CFG.corpseT seconds, and at most CFG.maxCorpses
+// bodies exist at once (the oldest is removed the moment a new death
+// would exceed the cap). Removal is real: the HP bar is disposed, the
+// character group leaves the scene, its geometries are freed, and the
+// record is spliced out of S.npcs (plus any partner link is cut).
+// ONLY records already in state 'dead' enter this path - children have
+// no health and can never be dead, and 'down' adults are not corpses:
+// they still get back up when their npcDownT runs out, as before.
+export function corpseCount() {
+  return S.npcs.filter((n) => n.state === 'dead').length;
+}
+
+function removeCorpseAt(i) {
+  const rec = S.npcs[i];
+  if (!rec || rec.state !== 'dead' || rec.kind === 'child') return false;
+  if (rec.bar) { rec.bar.dispose(); rec.bar = null; }
+  if (rec.socialPartner) {
+    if (rec.socialPartner.socialPartner === rec) rec.socialPartner.socialPartner = null;
+    rec.socialPartner = null;
+  }
+  if (rec.group && rec.group.parent) rec.group.parent.remove(rec.group);
+  disposePersonGroup(rec.group);
+  rec.removed = true; // stale holders (e.g. mission guard lists) check this
+  S.npcs.splice(i, 1);
+  return true;
+}
+
+// Enforce the corpse cap: remove the longest-dead bodies first.
+function enforceCorpseCap() {
+  while (corpseCount() > CFG.maxCorpses) {
+    let oldest = -1; let oldestAge = -1;
+    for (let i = 0; i < S.npcs.length; i++) {
+      const n = S.npcs[i];
+      if (n.state !== 'dead') continue;
+      const age = n.corpseAge || 0;
+      if (age > oldestAge) { oldestAge = age; oldest = i; }
+    }
+    if (oldest < 0 || !removeCorpseAt(oldest)) break;
+  }
+}
+
+// Age every corpse by dt and remove the expired ones. Called once per
+// updatePopulation tick, before the main loop, so the main loop never
+// iterates a record that is being spliced out from under it.
+function sweepCorpses(dt) {
+  for (let i = S.npcs.length - 1; i >= 0; i--) {
+    const n = S.npcs[i];
+    if (n.state !== 'dead' || n.kind === 'child' || n.kind === 'animal') continue;
+    n.corpseAge = (n.corpseAge || 0) + dt;
+    if (n.corpseAge >= CFG.corpseT) removeCorpseAt(i);
+  }
+  enforceCorpseCap();
+}
+
 // Kill an adult outright (a car impact at speed). The state is 'dead'
-// and it is PERMANENT: no downT, no getting back up - the body stays.
+// and it is PERMANENT: no downT, no getting back up. Round 12: the body
+// itself is temporary now - corpseAge starts at 0 and sweepCorpses()
+// removes the body after CFG.corpseT (or sooner past CFG.maxCorpses).
 // Children can never reach this function (see checkCarHits).
 export function killNPC(rec) {
   if (!rec || rec.kind === 'child' || rec.kind === 'animal') return false;
   rec.state = 'dead';
   rec.health = 0;
   rec.animSpeed = 0;
+  rec.corpseAge = 0;
+  // the HP bar dies with its owner: dispose it now instead of leaving
+  // a frozen sprite floating over the body
+  if (rec.bar) { rec.bar.dispose(); rec.bar = null; }
+  rec.barT = 0;
+  enforceCorpseCap();
   return true;
 }
 
@@ -248,6 +312,11 @@ export function damageNPC(rec, dmg) {
     rec.state = 'down';
     rec.downT = CFG.npcDownT;
     rec.animSpeed = 0;
+    // round 12: hide the HP bar while down - the down branch of
+    // updatePopulation never refreshes it, so without this a stale bar
+    // would hang over the fallen body until it gets back up
+    if (rec.bar) rec.bar.set(0, false);
+    rec.barT = 0;
     return 'down';
   }
   // every surviving adult human fights back now, whatever their job -
@@ -327,8 +396,9 @@ function checkCarHits(n) {
 
 export function updatePopulation(dt) {
   const p = S.p;
+  sweepCorpses(dt); // round 12: age + expire dead bodies before the loop
   for (const n of S.npcs) {
-    if (n.state === 'dead') { syncMesh(n); continue; } // a body stays a body
+    if (n.state === 'dead') { syncMesh(n); continue; } // a body stays a body - until corpseT removes it
     if (n.state === 'down') {
       n.downT -= dt;
       if (n.downT <= 0 && n.kind !== 'child') {

@@ -12,7 +12,7 @@ import { W, wantedSnapshot, updateWanted, noteVehicleSwap, noteClothesChange, cl
 import { updatePolice, policeDebug, nearestPoliceDist } from './police.js';
 import { WPN, weaponsSnapshot, selectWeapon, buyItem, meleeAttack, punchNearest, shoot, initDrops, updateDrops, dropsInfo, pickupDropAt, flushBufferedAttack } from './weapons.js';
 import { MISSIONS, M, startMission, updateMissions, missionSnapshot, missionsInit, setStealCar } from './missions.js';
-import { initHUD, setObjective, showBanner, showDialog, hideDialog, setPrompt, openShop, closeShop, refreshShop, updateHUD, setMinimapTarget, showDamage, hudInfo, toastInfo, openMap, closeMap, isMapOpen, mapInfo, setFloaterProjector, updateFloaters, updateObjectiveDist } from './hud.js';
+import { initHUD, setObjective, showBanner, showDialog, hideDialog, setPrompt, openShop, closeShop, refreshShop, updateHUD, setMinimapTarget, showDamage, hudInfo, toastInfo, openMap, closeMap, isMapOpen, mapInfo, setFloaterProjector, updateFloaters, updateObjectiveDist, floatersInfo } from './hud.js';
 import { initTouch, refreshTouchVisibility, deviceMode, cycleDeviceMode, modeOverrideValue } from './touch.js';
 import { audioInit, sfx, sirenUpdate, audioToggleMute, audioIsMuted, audioInfo } from './audio.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.min.js';
@@ -889,6 +889,19 @@ window.PB = {
   combatInfo: () => ({ cfg: { punch: CFG.punchDamage, kick: CFG.kickDamage, knife: CFG.knifeDamage, bat: CFG.batonDamage, bullet: CFG.bulletDamage, maxHealth: 100 }, player: { health: S.health, fightMode: S.combat.fightT > 0, fightT: +S.combat.fightT.toFixed(2) }, npcs: S.npcs.filter((n) => n.kind !== 'animal').map((n) => ({ id: S.npcs.indexOf(n), kind: n.kind, weapon: n.weapon || null, hasHealth: 'health' in n, health: 'health' in n ? n.health : null, state: n.state, bar: !!(n.barT > 0), x: Math.round(n.x * 10) / 10, z: Math.round(n.z * 10) / 10 })) }),
   bodyMetrics: () => { const bb = new THREE.Box3(); playerGroup.traverse((o) => { if (o.isMesh) bb.union(new THREE.Box3().setFromObject(o)); }); const head = playerGroup.userData.parts.headMesh; const hb = head ? new THREE.Box3().setFromObject(head) : bb; return { height: +(bb.max.y - bb.min.y).toFixed(3), headHeight: +(hb.max.y - hb.min.y).toFixed(3), ratio: +((bb.max.y - bb.min.y) / (hb.max.y - hb.min.y)).toFixed(2) }; },
   counts: countsSnapshot,
+  // round 12: live accumulation counts for the cleanup caps - every
+  // number here must stay bounded by its CFG limit while playing
+  debugCounts: () => ({
+    drops: S.drops.length,
+    corpses: S.npcs.filter((n) => n.state === 'dead').length,
+    floaters: floatersInfo().active,
+    floatersPooled: floatersInfo().pooled,
+    npcs: S.npcs.length,
+    police: S.policeUnits.length,
+    cars: S.cars.length,
+    explosionFxActive: S.cars.filter((c) => c.fx && c.fx.active).length,
+    sceneChildren: scene.children.length,
+  }),
   debugCars: () => ({
     parked: S.cars.filter((c) => !c.traffic).map((c) => ({ x: c.x, z: c.z, model: c.model, heading: c.heading, len: c.len, wid: c.wid })),
     traffic: S.cars.filter((c) => c.traffic).map((c) => ({ x: c.x, z: c.z, model: c.model, heading: c.heading, len: c.len, wid: c.wid })),

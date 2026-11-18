@@ -225,6 +225,9 @@ export function updateMissions(dt) {
     }
     if (left === 0) advanceStage();
   } else if (st.type === 'sneak') {
+    // round 12: a guard whose corpse was cleaned up leaves this list
+    // too, instead of shoving the player from beyond the grave
+    if (M.guards.some((g) => g.removed)) M.guards = M.guards.filter((g) => !g.removed);
     // guards shove a standing intruder back to the warehouse gate
     for (const gNpc of M.guards) {
       if (!p.crouch && dist2d(p.x, p.z, gNpc.x, gNpc.z) < 4.2) {
