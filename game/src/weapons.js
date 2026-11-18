@@ -57,7 +57,7 @@ function frontTarget(maxDist, arc) {
   const p = S.p;
   let best = null; let bd = maxDist;
   for (const n of S.npcs) {
-    if (n.kind === 'child' || n.state === 'down') continue;
+    if (n.kind === 'child' || n.state === 'down' || n.state === 'dead') continue;
     const d = dist2d(p.x, p.z, n.x, n.z);
     if (d > bd) continue;
     const ang = Math.atan2(n.x - p.x, n.z - p.z);
@@ -116,7 +116,7 @@ export function punchNearest() {
   const p = S.p;
   let best = null; let bd = 30;
   for (const n of S.npcs) {
-    if (n.kind === 'child' || n.kind === 'animal' || n.state === 'down') continue;
+    if (n.kind === 'child' || n.kind === 'animal' || n.state === 'down' || n.state === 'dead') continue;
     const d = dist2d(p.x, p.z, n.x, n.z);
     if (d < bd) { bd = d; best = n; }
   }

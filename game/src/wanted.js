@@ -48,7 +48,7 @@ export function wantedSnapshot() {
 // police unit nearby also sees it.
 export function crimeIsWitnessed(x, z, victim) {
   for (const n of S.npcs) {
-    if (n.kind === 'child' || n.kind === 'animal' || n.state === 'down') continue;
+    if (n.kind === 'child' || n.kind === 'animal' || n.state === 'down' || n.state === 'dead') continue;
     if (dist2d(x, z, n.x, n.z) <= CFG.witnessRadius) return true;
   }
   if (victim && victim.kind !== 'child' && victim.kind !== 'animal') return true;

@@ -7,6 +7,13 @@ let ctx = null;
 let sirenNodes = null;
 let muted = false;
 
+// Event counters: headless probes cannot hear, so every crash and
+// explosion the game plays is counted here and read back via PB.
+export const AUDIO_STATS = { crash: 0, crashHard: 0, explosion: 0, punch: 0, shot: 0 };
+export function audioInfo() {
+  return { crash: AUDIO_STATS.crash, crashHard: AUDIO_STATS.crashHard, explosion: AUDIO_STATS.explosion, muted };
+}
+
 export function audioInit() {
   if (ctx) { if (ctx.state === 'suspended') ctx.resume(); return; }
   try {
@@ -51,9 +58,28 @@ function noiseBurst(dur, vol, freq) {
 }
 
 export const sfx = {
-  punch() { noiseBurst(0.08, 0.25, 500); tone(120, 0.08, 'triangle', 0.15, 60); },
+  // Vehicle impacts: a light scrape is a short metallic tick, a hard hit
+  // is a deep crunch with a falling body thud. Both are counted.
+  crash(hard) {
+    AUDIO_STATS.crash++;
+    if (hard) {
+      AUDIO_STATS.crashHard++;
+      noiseBurst(0.34, 0.5, 300); noiseBurst(0.2, 0.35, 1200);
+      tone(90, 0.3, 'triangle', 0.3, 38); tone(55, 0.42, 'sine', 0.3, 30);
+    } else {
+      noiseBurst(0.1, 0.28, 750); tone(150, 0.09, 'triangle', 0.14, 80);
+    }
+  },
+  // The explosion: a sub-bass boom, a long noise wash and debris ticks.
+  explosion() {
+    AUDIO_STATS.explosion++;
+    noiseBurst(0.9, 0.6, 160); noiseBurst(0.5, 0.4, 700);
+    tone(64, 0.8, 'sine', 0.5, 26); tone(120, 0.4, 'sawtooth', 0.2, 34);
+    setTimeout(() => noiseBurst(0.16, 0.2, 1500), 130);
+  },
+  punch() { AUDIO_STATS.punch++; noiseBurst(0.08, 0.25, 500); tone(120, 0.08, 'triangle', 0.15, 60); },
   kick() { noiseBurst(0.1, 0.3, 380); tone(95, 0.1, 'triangle', 0.18, 50); },
-  shot() { noiseBurst(0.14, 0.4, 1800); tone(220, 0.1, 'sawtooth', 0.2, 55); },
+  shot() { AUDIO_STATS.shot++; noiseBurst(0.14, 0.4, 1800); tone(220, 0.1, 'sawtooth', 0.2, 55); },
   dryFire() { tone(1400, 0.04, 'square', 0.06); },
   pickup() { tone(660, 0.09, 'sine', 0.14); setTimeout(() => tone(990, 0.12, 'sine', 0.14), 70); },
   buy() { tone(880, 0.08, 'sine', 0.15); setTimeout(() => tone(1320, 0.14, 'sine', 0.15), 80); },

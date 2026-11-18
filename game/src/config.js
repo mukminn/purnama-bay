@@ -30,10 +30,12 @@ export const CFG = {
   ammoPack: 12,
   // mission rewards (PB$) - the ONLY source of money in the game
   rewards: [400, 350, 600, 750, 900, 1500],
-  // world layout anchors
+  // world layout anchors (all on footpath / plaza ground, never on a
+  // carriageway: shopDoor is the street-corner entrance point of the
+  // PURNAMA ARMS block, safehouse and miraSpot sit inside city blocks)
   shopDoor: { x: 34, z: 29 },
-  safehouse: { x: 122, z: -106 },
-  miraSpot: { x: 2, z: 36 },
+  safehouse: { x: 100, z: -100 },
+  miraSpot: { x: 10, z: 31 },
   worldHalf: 148,
   // combat
   punchDamage: 12,
@@ -45,6 +47,11 @@ export const CFG = {
   attackWindow: 0.7,       // how long an attack reads as "active" (attackT)
   bustedRadius: 1.5,
   bustedTime: 3.5,
+  // day / night cycle (seconds of game time for one full turn) and the
+  // hard-impact count that blows a car up
+  dayCycle: 300,
+  hardHitSpeed: 8.5,       // impact speed (m/s) that counts as a HARD hit
+  hardHitsToExplode: 10,
   // presentation
   cityName: 'PURNAMA BAY',
   heroName: 'Raka Pradana',
@@ -65,6 +72,9 @@ export const S = {
     x: 0, y: 0, z: 30, heading: 0, vy: 0,
     speed: 0, moving: false, crouch: false,
     peakY: 0, onGround: true,
+    vel: 0,               // ramped ground speed (analogue acceleration)
+    velHeading: 0,        // heading of the actual velocity vector
+    groundY: 0,           // pavement height under the feet (sidewalk 0.12)
   },
   inCar: false,
   currentCar: null,        // vehicle record while driving

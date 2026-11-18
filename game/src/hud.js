@@ -29,9 +29,24 @@ export function showHitMarker() {
 
 export function setMinimapTarget(t) { minimapTarget = t; }
 
+// The last drawn player-arrow angle (canvas radians) and the heading of
+// the player's actual velocity vector, for the direction probe.
+const arrowState = { drawn: 0, vel: 0 };
+export function hudInfo() {
+  let d = arrowState.drawn - arrowState.vel;
+  while (d > Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  return {
+    arrowAngle: Math.round(arrowState.drawn * 1000) / 1000,
+    velAngle: Math.round(arrowState.vel * 1000) / 1000,
+    diffDeg: Math.round(Math.abs(d) * 180 / Math.PI * 10) / 10,
+    speedKmh: S.inCar && S.currentCar ? Math.round(Math.abs(S.currentCar.speed) * 3.6) : 0,
+  };
+}
+
 export function initHUD(hooks) {
-  for (const id of ['objective', 'status-box', 'minimap', 'minimap-wrap', 'prompt',
-    'hud-money', 'hud-health-fill', 'hud-stars', 'hud-weapon',
+  for (const id of ['objective', 'stats', 'minimap', 'minimap-wrap', 'prompt',
+    'hud-money', 'hud-health-fill', 'hud-stars', 'hud-weapon', 'speedo',
     'dialog', 'dialog-name', 'dialog-text', 'dialog-portrait', 'dialog-next',
     'shop', 'shop-msg', 'shop-money', 'banner',
     'dmg-vignette', 'dmg-dir', 'hitmarker']) {
@@ -46,6 +61,8 @@ export function initHUD(hooks) {
 }
 
 export function setObjective(text) {
+  // ONE short line only: the stage label, never a paragraph. Long
+  // labels are clipped by CSS ellipsis on the same single line.
   if (el.objective) el.objective.textContent = text || '';
 }
 
@@ -121,6 +138,15 @@ export function updateHUD(weaponSnap) {
     lastWeapon = wtxt;
     el['hud-weapon'].textContent = wtxt;
   }
+  // speedometer: only while driving
+  if (el.speedo) {
+    if (S.inCar && S.currentCar) {
+      el.speedo.style.display = 'block';
+      el.speedo.textContent = `${Math.round(Math.abs(S.currentCar.speed) * 3.6)} km/h`;
+    } else {
+      el.speedo.style.display = 'none';
+    }
+  }
   // fade the combat feedback overlays (damage flash ~0.55 s, hit ~0.22 s)
   const now = performance.now();
   if (el['dmg-vignette']) {
@@ -135,10 +161,8 @@ export function updateHUD(weaponSnap) {
   drawMinimap();
 }
 
-// A one-line summary for the status box tooltip (money, heat, weapon).
-export function statusSummary(weaponSnap) {
-  return `PB$ ${S.money} · ${W.stars} star${W.stars === 1 ? '' : 's'} · ${weaponSnap.active}`;
-}
+// (The old status-box summary is gone with the box itself: the HUD is
+// stars + money + health + weapon, one objective line, and nothing else.)
 
 // The minimap disc: sea to the north, sand, road grid, blocks, then the
 // living dots - player arrow centre-ish, mission gold, police red.
@@ -188,9 +212,20 @@ function drawMinimap() {
   for (const u of S.policeUnits) dot(u.x, u.z, '#ff3b30', 2.6);
   if (minimapTarget) dot(minimapTarget.x, minimapTarget.z, '#ffd34d', 4);
   dot(CFG.shopDoor.x, CFG.shopDoor.z, '#7ec8e3', 2.6);
-  // player arrow, rotated to heading (map north = world +z up)
+  // Player arrow: it must point along the ACTUAL velocity vector.
+  // Map space: world +x -> canvas +x, world +z -> canvas -y (north up).
+  // A world heading a has forward (sin a, cos a), which lands on the
+  // canvas as (sin a, -cos a) - exactly what rotating the up-pointing
+  // arrow by +a (canvas rotation is clockwise, y down) produces. The
+  // old code rotated by -heading, which mirrored the arrow: it pointed
+  // backwards/sideways against the real motion. When reversing, the
+  // velocity heading is heading+PI (S.p.velHeading), so the arrow
+  // flips with the motion, not with the nose.
+  const velA = (S.p.moving || Math.abs(S.p.speed) > 0.2) ? S.p.velHeading : S.p.heading;
+  arrowState.drawn = velA;
+  arrowState.vel = velA;
   g.translate(half, half);
-  g.rotate(-S.p.heading);
+  g.rotate(velA);
   g.fillStyle = '#ffffff';
   g.strokeStyle = '#1d2733';
   g.beginPath(); g.moveTo(0, -6); g.lineTo(4.4, 5); g.lineTo(0, 2.4); g.lineTo(-4.4, 5); g.closePath();

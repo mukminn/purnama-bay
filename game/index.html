@@ -13,15 +13,17 @@
   .panel { background: rgba(13, 22, 32, 0.78); border: 1px solid rgba(255, 211, 77, 0.35); border-radius: 10px; backdrop-filter: blur(3px); }
   /* ---------- HUD ---------- */
   #hud { position: fixed; inset: 0; pointer-events: none; display: none; }
-  #objective { position: fixed; top: 12px; left: 12px; max-width: 300px; padding: 9px 12px; font-size: 14px; line-height: 1.35; color: #ffe9a8; }
+  #objective { position: fixed; top: 12px; left: 12px; max-width: 330px; padding: 7px 11px; font-size: 13.5px; line-height: 1.2; color: #ffe9a8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #minimap-wrap { position: fixed; top: 12px; right: 12px; width: 148px; height: 148px; border-radius: 50%; overflow: hidden; border: 2px solid rgba(255,255,255,0.35); background: #8a8f66; }
   #minimap { width: 148px; height: 148px; display: block; }
-  #status-box { position: fixed; top: 108px; left: 12px; width: 196px; padding: 9px 12px; }
-  #hud-money { font-size: 19px; font-weight: 700; color: #ffd34d; }
-  #hud-health-track { height: 9px; background: rgba(255,255,255,0.18); border-radius: 5px; margin: 6px 0; overflow: hidden; }
+  /* compact stat stack: stars, money, health, weapon - no text panels */
+  #stats { position: fixed; top: 52px; left: 12px; width: 168px; padding: 7px 11px; }
+  #hud-money { font-size: 17px; font-weight: 700; color: #ffd34d; }
+  #hud-health-track { height: 8px; background: rgba(255,255,255,0.18); border-radius: 5px; margin: 5px 0; overflow: hidden; }
   #hud-health-fill { height: 100%; width: 100%; background: #57c256; transition: width 0.2s; }
-  #hud-stars { font-size: 17px; color: #ffd34d; min-height: 20px; letter-spacing: 2px; }
-  #hud-weapon { font-size: 12.5px; color: #bcd8e8; letter-spacing: 1px; }
+  #hud-stars { font-size: 16px; color: #ffd34d; min-height: 19px; letter-spacing: 2px; }
+  #hud-weapon { font-size: 12px; color: #bcd8e8; letter-spacing: 1px; }
+  #speedo { position: fixed; right: 26px; bottom: 96px; padding: 6px 14px; font-size: 21px; font-weight: 800; color: #ffe9a8; display: none; font-variant-numeric: tabular-nums; }
   #prompt { position: fixed; right: 36px; bottom: 118px; width: 180px; padding: 10px 8px; text-align: center; font-weight: 700; font-size: 14.5px; color: #0d1620; background: #ffd34d; border-radius: 9px; display: none; box-shadow: 0 4px 18px rgba(0,0,0,0.4); }
   #banner { position: fixed; top: 64px; left: 50%; transform: translateX(-50%); padding: 10px 22px; font-size: 19px; font-weight: 700; color: #ffd34d; opacity: 0; transition: opacity 0.4s; pointer-events: none; }
   /* ---------- dialog ---------- */
@@ -78,12 +80,13 @@
 <div id="hud">
   <div id="objective" class="panel"></div>
   <div id="minimap-wrap"><canvas id="minimap" width="148" height="148"></canvas></div>
-  <div id="status-box" class="panel">
+  <div id="stats" class="panel">
+    <div id="hud-stars"></div>
     <div id="hud-money">PB$ 0</div>
     <div id="hud-health-track"><div id="hud-health-fill"></div></div>
-    <div id="hud-stars"></div>
     <div id="hud-weapon">FISTS</div>
   </div>
+  <div id="speedo" class="panel"></div>
   <div id="prompt"></div>
   <div id="banner" class="panel"></div>
 </div>

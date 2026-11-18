@@ -51,49 +51,125 @@ export function makePerson(opts = {}) {
   if (opts.skirt) {
     coreParts.push({ geo: new THREE.CylinderGeometry(0.175, 0.26, 0.36, 9, 1, true), color: pants, y: 0.76, sz: 0.72 });
   }
-  const core = new THREE.Mesh(mergeColored(coreParts), coloredLambert);
+  // The player's head is a separate mesh so it can turn toward the
+  // camera / travel direction; everyone else keeps the merged head.
+  let core; let headMesh = null;
+  if (opts.headSeparate) {
+    const headParts = coreParts.splice(1, 2); // head sphere + hair cap
+    core = new THREE.Mesh(mergeColored(coreParts), coloredLambert);
+    headMesh = new THREE.Mesh(mergeColored(headParts), coloredLambert);
+    headMesh.castShadow = true;
+    // head geometry is authored around y=1.70; re-pivot it at the neck
+    headMesh.geometry.translate(0, -1.70, 0);
+    headMesh.position.set(0, 1.70, 0);
+    g.add(headMesh);
+  } else {
+    core = new THREE.Mesh(mergeColored(coreParts), coloredLambert);
+  }
   core.castShadow = true;
-  // torso: chest wider than waist, flattened front-to-back
+  // torso: chest wider than waist, flattened front-to-back. Its geometry
+  // is re-pivoted at the waist so it can lean and sway as its own joint.
   const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.185, 0.145, 0.58, 9), shirtMat);
-  torso.position.set(0, 1.24, 0);
+  torso.geometry.translate(0, 0.29, 0);
+  torso.position.set(0, 0.95, 0);
   torso.scale.z = 0.62;
   torso.castShadow = true;
-  const armL = taperedLimb(0.062, 0.042, 0.60, shirtMat, -0.27, 1.45, 0.9);
-  const armR = taperedLimb(0.062, 0.042, 0.60, shirtMat, 0.27, 1.45, 0.9);
+  // arms: upper arm from the shoulder + a forearm child at the elbow, so
+  // the elbow is a real second joint that bends as the arm swings
+  function makeArm(side, mat) {
+    const upper = taperedLimb(0.062, 0.048, 0.32, mat, side * 0.27, 1.45, 0.9);
+    const foreGeo = new THREE.CylinderGeometry(0.046, 0.036, 0.30, 7);
+    foreGeo.translate(0, -0.15, 0);
+    const fore = new THREE.Mesh(foreGeo, mat);
+    fore.position.set(0, -0.32, 0);
+    upper.add(fore);
+    return { upper, fore };
+  }
+  // legs: thigh from the hip + a shin child at the knee
+  function makeLeg(side, mat) {
+    const thigh = taperedLimb(0.088, 0.062, 0.46, mat, side * 0.105, 0.88, 0.9);
+    const shinGeo = new THREE.CylinderGeometry(0.058, 0.042, 0.42, 7);
+    shinGeo.translate(0, -0.21, 0);
+    const shin = new THREE.Mesh(shinGeo, mat);
+    shin.position.set(0, -0.46, 0);
+    thigh.add(shin);
+    return { upper: thigh, fore: shin };
+  }
+  const armL = makeArm(-1, shirtMat); const armR = makeArm(1, shirtMat);
   const legMat = new THREE.MeshLambertMaterial({ color: pants });
-  const legL = taperedLimb(0.088, 0.048, 0.86, legMat, -0.105, 0.88, 0.9);
-  const legR = taperedLimb(0.088, 0.048, 0.86, legMat, 0.105, 0.88, 0.9);
-  g.add(core, torso, armL, armR, legL, legR);
+  const legL = makeLeg(-1, legMat); const legR = makeLeg(1, legMat);
+  g.add(core, torso, armL.upper, armR.upper, legL.upper, legR.upper);
   g.scale.setScalar(s);
-  g.userData.parts = { armL, armR, legL, legR, torso, head: core };
+  g.userData.parts = {
+    armL: armL.upper, armR: armR.upper, legL: legL.upper, legR: legR.upper,
+    foreL: armL.fore, foreR: armR.fore, shinL: legL.fore, shinR: legR.fore,
+    torso, head: headMesh || core, headMesh,
+  };
   return g;
 }
 
-// Swing limbs for a walk cycle; phase advances with distance travelled.
+const JOINT_KEYS = ['legL', 'legR', 'shinL', 'shinR', 'armL', 'armR', 'foreL', 'foreR', 'torsoX', 'torsoZ', 'bodyX', 'headYaw'];
+
+// Procedural joint animation. Every joint angle is a SMOOTHED value:
+// targets come from the gait cycle (continuous sine swings, elbows and
+// knees bending in counter-phase), and the actual angles chase the
+// targets through an exponential damp, so pose changes - idle, walk,
+// run, crouch, attack, falling - are interpolated over ~120 ms instead
+// of snapping. The torso leans into speed and sways with the stride;
+// the head (player only) turns toward the travel/camera direction.
+// rec.joints is the live joint snapshot the probes read.
 export function animatePerson(rec, dt) {
   const parts = rec.group.userData.parts;
   if (!parts) return;
-  const moving = rec.animSpeed > 0.15 && rec.state !== 'down';
+  const down = rec.state === 'down' || rec.state === 'dead';
+  const moving = rec.animSpeed > 0.15 && !down;
   rec.animPhase += dt * (moving ? rec.animSpeed * 3.4 : 0);
-  const sw = moving ? Math.sin(rec.animPhase) * 0.55 : 0;
-  parts.legL.rotation.x = sw;
-  parts.legR.rotation.x = -sw;
+  const ph = rec.animPhase;
+  const sw = moving ? Math.sin(ph) : 0;
+  const amp = rec.state === 'dead' ? 0 : (0.30 + Math.min(0.30, rec.animSpeed * 0.045));
+  const T = { // targets
+    legL: sw * amp, legR: -sw * amp,
+    shinL: Math.max(0, -Math.sin(ph)) * amp * 0.9 + 0.04,
+    shinR: Math.max(0, Math.sin(ph)) * amp * 0.9 + 0.04,
+    armL: -sw * amp * 0.8, armR: sw * amp * 0.8,
+    foreL: 0.30 + Math.max(0, Math.sin(ph)) * 0.25,
+    foreR: 0.30 + Math.max(0, -Math.sin(ph)) * 0.25,
+    torsoX: moving ? Math.min(0.16, rec.animSpeed * 0.016) : 0.02,
+    torsoZ: moving ? Math.sin(ph * 0.5) * 0.035 : Math.sin(ph * 0.35) * 0.012,
+    bodyX: down ? -Math.PI / 2 : 0,
+    headYaw: 0,
+  };
   if (rec.state === 'attack') {
-    parts.armR.rotation.x = -2.1 + Math.sin(rec.animPhase * 3) * 0.5;
-    parts.armL.rotation.x = 0.3;
-  } else {
-    parts.armL.rotation.x = -sw * 0.8;
-    parts.armR.rotation.x = sw * 0.8;
+    T.armR = -2.0 + Math.sin(ph * 3) * 0.4;
+    T.foreR = 0.25;
+    T.armL = 0.3;
   }
-  if (rec.state === 'down') {
-    rec.group.rotation.x = -Math.PI / 2;
-    rec.group.position.y = 0.25;
-  } else if (rec.group.rotation.x !== 0) {
-    rec.group.rotation.x = 0;
-    rec.group.position.y = 0;
+  if (rec.crouchVisual) { T.torsoX = 0.30; T.legL = 0.5; T.legR = -0.35; T.shinL = 0.9; T.shinR = 0.7; }
+  // the player's head looks toward the camera heading when one is given
+  // (headTargetYaw is the desired head yaw relative to the body)
+  if (parts.headMesh && typeof rec.headTargetYaw === 'number') {
+    let d = rec.headTargetYaw;
+    while (d > Math.PI) d -= Math.PI * 2;
+    while (d < -Math.PI) d += Math.PI * 2;
+    T.headYaw = Math.max(-0.7, Math.min(0.7, d));
   }
-  if (rec.crouchVisual) rec.group.scale.y = (rec.baseScale || 1) * 0.72;
-  else if (rec.group.scale.y !== (rec.baseScale || 1)) rec.group.scale.y = rec.baseScale || 1;
+  if (!rec.joints) {
+    rec.joints = { legL: 0, legR: 0, shinL: 0, shinR: 0, armL: 0, armR: 0, foreL: 0.3, foreR: 0.3, torsoX: 0, torsoZ: 0, bodyX: 0, headYaw: 0, scaleY: rec.baseScale || 1 };
+  }
+  const J = rec.joints;
+  const k = 1 - Math.exp(-dt * 14); // ~120 ms pose interpolation
+  for (const key of JOINT_KEYS) J[key] += (T[key] - J[key]) * k;
+  const targetScaleY = (rec.baseScale || 1) * (rec.crouchVisual ? 0.72 : 1);
+  J.scaleY += (targetScaleY - J.scaleY) * k;
+  parts.legL.rotation.x = J.legL; parts.legR.rotation.x = J.legR;
+  parts.shinL.rotation.x = J.shinL; parts.shinR.rotation.x = J.shinR;
+  parts.armL.rotation.x = J.armL; parts.armR.rotation.x = J.armR;
+  parts.foreL.rotation.x = -J.foreL; parts.foreR.rotation.x = -J.foreR;
+  parts.torso.rotation.x = J.torsoX; parts.torso.rotation.z = J.torsoZ;
+  if (parts.headMesh) parts.headMesh.rotation.y = J.headYaw;
+  rec.group.rotation.x = J.bodyX;
+  rec.group.scale.y = J.scaleY;
+  if (down) rec.group.position.y = 0.25;
 }
 
 // Create the data record for a person. Children deliberately get NO

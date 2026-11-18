@@ -114,7 +114,8 @@ export function startMission(n) {
 
 function pushObjective() {
   const st = currentStage();
-  if (st) onObjective(`${MISSIONS[M.index].name} - ${st.label}`);
+  // the HUD shows ONE short line: the current stage's label, nothing more
+  if (st) onObjective(st.label);
   else if (M.completed >= MISSIONS.length) onObjective('Free roam - the bay is yours.');
   else onObjective('');
 }
@@ -231,7 +232,7 @@ export function storyTotalReward() {
 // Mission 6 opens with the syndicate's frame-up: a staged, genuinely
 // witnessed crime through the normal wanted pipeline (never a grant).
 export function stageFinaleCrime() {
-  const near = nearestNPC(S.p.x, S.p.z, (n) => n.kind !== 'child' && n.kind !== 'animal' && n.state !== 'down');
+  const near = nearestNPC(S.p.x, S.p.z, (n) => n.kind !== 'child' && n.kind !== 'animal' && n.state !== 'down' && n.state !== 'dead');
   if (near) {
     near.rec.x = S.p.x + Math.sin(S.p.heading) * 1.6;
     near.rec.z = S.p.z + Math.cos(S.p.heading) * 1.6;

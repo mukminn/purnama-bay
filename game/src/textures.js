@@ -35,7 +35,7 @@ export function facadeTexture(base, trim, floors) {
   for (let r = 0; r < rows; r++) {
     for (let col = 0; col < 4; col++) {
       const x = 18 + col * 60; const y = 30 + r * 56;
-      const lit = Math.random() < 0.38;
+      const lit = Math.random() < 0.16;
       g.fillStyle = '#20303a'; g.fillRect(x, y, 34, 38);
       if (lit) { // evening-lit window: warm amber with a blind line
         g.fillStyle = '#ffca7a'; g.fillRect(x + 3, y + 3, 28, 32);

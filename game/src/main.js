@@ -4,17 +4,17 @@
 // hook the automated probes drive the real game through.
 import * as THREE from 'three';
 import { CFG, S, clamp, angleLerp, pushOut, pushOutCars, dist2d } from './config.js';
-import { buildWorld, PLACES } from './world.js';
-import { buildPopulation, updatePopulation, countsSnapshot, nearestNPC, scareArea } from './population.js';
+import { buildWorld, PLACES, updateDayNight, setPhase, phaseInfo, WORLD_COUNTS, ROAD_LINES, PARK, groundYAt } from './world.js';
+import { buildPopulation, updatePopulation, countsSnapshot, nearestNPC, scareArea, pedPositions } from './population.js';
 import { makePerson, animatePerson } from './characters.js';
-import { buildVehicles, nearestEnterableCar, driveStep, updateTraffic, enterCar, exitCar, syncCarMesh } from './vehicles.js';
+import { buildVehicles, nearestEnterableCar, driveStep, updateTraffic, enterCar, exitCar, syncCarMesh, updateVehicleFx, carInfo } from './vehicles.js';
 import { W, wantedSnapshot, updateWanted, noteVehicleSwap, noteClothesChange, clearWanted, reportCrime } from './wanted.js';
 import { updatePolice, policeDebug, nearestPoliceDist } from './police.js';
 import { WPN, weaponsSnapshot, selectWeapon, buyItem, meleeAttack, punchNearest, shoot, initDrops, updateDrops, dropsInfo, pickupDropAt, flushBufferedAttack } from './weapons.js';
 import { MISSIONS, M, startMission, updateMissions, missionSnapshot, missionsInit, setStealCar, stageFinaleCrime } from './missions.js';
-import { initHUD, setObjective, showBanner, showDialog, hideDialog, setPrompt, openShop, closeShop, refreshShop, updateHUD, setMinimapTarget, showDamage } from './hud.js';
+import { initHUD, setObjective, showBanner, showDialog, hideDialog, setPrompt, openShop, closeShop, refreshShop, updateHUD, setMinimapTarget, showDamage, hudInfo } from './hud.js';
 import { initTouch, refreshTouchVisibility } from './touch.js';
-import { audioInit, sfx, sirenUpdate, audioToggleMute } from './audio.js';
+import { audioInit, sfx, sirenUpdate, audioToggleMute, audioInfo } from './audio.js';
 
 const SAVE_KEY = 'purnama-bay-save-v1';
 
@@ -39,6 +39,8 @@ const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.1, 900);
 let camYaw = Math.PI;
 let camPitch = 0; // drag-orbit elevation: 0 = the classic follow height
+let pendingYaw = 0; // queued drag azimuth, drained at a capped rate
+let pendingPitch = 0;
 
 const worldRefs = buildWorld(scene);
 const mira = buildPopulation(scene);
@@ -47,8 +49,8 @@ const stealCar = buildVehicles(scene);
 setStealCar(stealCar);
 initDrops(scene);
 
-// Raka Pradana, the player avatar
-const playerGroup = makePerson({ shirt: 0x12716b, pants: 0x2c343a, skin: 0xa06a42 });
+// Raka Pradana, the player avatar (separate head mesh: it turns)
+const playerGroup = makePerson({ shirt: 0x12716b, pants: 0x2c343a, skin: 0xa06a42, headSeparate: true });
 scene.add(playerGroup);
 const playerAnim = { group: playerGroup, animSpeed: 0, animPhase: 0, state: 'wander', baseScale: 1, crouchVisual: false };
 
@@ -269,13 +271,14 @@ initTouch({
   onAct,
   onJump: doJump,
   onHit: () => { if (WPN.active === 'pistol') shoot(); else meleeAttack('punch'); },
-  // camera drag (touch right half / mouse on canvas): horizontal drag
-  // orbits the azimuth directly, vertical drag tilts the pitch inside
-  // sane limits. Releasing leaves the camera where it was dragged; the
-  // usual follow behaviour resumes by itself once Raka moves.
+  // camera drag (touch right half / mouse on canvas): drags feed a
+  // pending pool instead of snapping the azimuth - the loop drains the
+  // pool at a capped rate (3.2 rad/s), so even a fast flick can never
+  // whip the camera around in one frame. Releasing leaves the camera
+  // where it was dragged; follow behaviour resumes once Raka moves.
   onCamDrag: (dx, dy) => {
-    camYaw -= dx * 0.0052;
-    camPitch = clamp(camPitch + dy * 0.0035, -0.12, 0.6);
+    pendingYaw = clamp(pendingYaw - dx * 0.0052, -1.6, 1.6);
+    pendingPitch = clamp(pendingPitch + dy * 0.0035, -0.8, 0.8);
   },
 });
 
@@ -301,9 +304,17 @@ function updatePlayer(dt) {
     }
     const brake = keys.has('Space') || S.input.brakeTouch;
     driveStep(car, dt, throttle, steer, brake);
+    if (!S.inCar) { // the car exploded mid-step and threw Raka clear
+      playerGroup.visible = true;
+      playerGroup.position.set(p.x, p.y, p.z);
+      return;
+    }
     p.x = car.x; p.z = car.z; p.y = 0;
     p.heading = car.heading;
     p.speed = Math.abs(car.speed);
+    p.vel = Math.abs(car.speed);
+    // velocity heading: reversing means the motion points backwards
+    p.velHeading = car.speed >= 0 ? car.heading : car.heading + Math.PI;
     p.moving = Math.abs(car.speed) > 0.3;
     playerGroup.visible = false;
     camYaw = angleLerp(camYaw, car.heading, Math.min(1, dt * 3.2));
@@ -319,13 +330,13 @@ function updatePlayer(dt) {
   if (S.input.joyActive) { ix += S.input.joyX; iz += -S.input.joyY; }
   const mag = Math.sqrt(ix * ix + iz * iz);
   p.moving = mag > 0.12;
-  let speed = 0;
+  let targetSpeed = 0;
   if (p.moving) {
     const tier = p.crouch ? CFG.crouchSpeed
       : (keys.has('AltLeft') || keys.has('AltRight') || S.input.altHeld) ? CFG.walkSpeed
         : (keys.has('ShiftLeft') || keys.has('ShiftRight') || S.input.shiftHeld) ? CFG.sprintSpeed
           : CFG.runSpeed;
-    speed = tier * clamp(mag, 0, 1);
+    targetSpeed = tier * clamp(mag, 0, 1);
     // Camera-relative mapping: the camera sits behind the player at
     // -(sin(camYaw), cos(camYaw)), so screen-forward in world XZ is
     // (sin(camYaw), cos(camYaw)) and screen-right is (-cos(camYaw),
@@ -337,11 +348,21 @@ function updatePlayer(dt) {
       Math.sin(camYaw) * iz - Math.cos(camYaw) * ix,
       Math.cos(camYaw) * iz + Math.sin(camYaw) * ix);
     p.heading = angleLerp(p.heading, dirWorld, Math.min(1, dt * 14));
-    p.x += Math.sin(p.heading) * speed * dt;
-    p.z += Math.cos(p.heading) * speed * dt;
     camYaw = angleLerp(camYaw, p.heading, Math.min(1, dt * 4.5));
   }
-  p.speed = speed;
+  // Analogue ramp: the ground speed CHASES the target at a fixed
+  // acceleration (30 m/s^2), so a stick flick reaches full run in
+  // ~0.18 s instead of teleporting to it, and releasing the stick
+  // glides to a stop over a similar beat. Peak tiers are unchanged.
+  const ACC = 30;
+  if (p.vel < targetSpeed) p.vel = Math.min(targetSpeed, p.vel + ACC * dt);
+  else p.vel = Math.max(targetSpeed, p.vel - ACC * dt);
+  if (p.vel > 0.01) {
+    p.x += Math.sin(p.heading) * p.vel * dt;
+    p.z += Math.cos(p.heading) * p.vel * dt;
+  }
+  p.speed = p.vel;
+  p.velHeading = p.heading; // on foot the motion follows the nose
   // vertical: jump arc
   if (!p.onGround) {
     p.y += p.vy * dt;
@@ -353,10 +374,14 @@ function updatePlayer(dt) {
   pushOutCars(p, 0.35); // cars are solid: the body stops at the bodywork
   p.x = clamp(p.x, -CFG.worldHalf + 2, CFG.worldHalf - 2);
   p.z = clamp(p.z, -CFG.worldHalf + 2, CFG.worldHalf + 20);
-  playerGroup.position.set(p.x, p.y, p.z);
+  p.groundY = groundYAt(p.x, p.z); // feet ride up onto the pavement
+  playerGroup.position.set(p.x, p.y + p.groundY, p.z);
   playerGroup.rotation.y = p.heading;
-  playerAnim.animSpeed = speed;
+  playerAnim.animSpeed = p.vel;
   playerAnim.crouchVisual = p.crouch;
+  // the head turns toward the camera's view direction, relative to the
+  // body - looking where you are steering the camera, genre-style
+  playerAnim.headTargetYaw = camYaw - p.heading;
   animatePerson(playerAnim, dt);
 }
 
@@ -430,7 +455,7 @@ function stateSnapshot() {
       attackT: S.combat.attackT, attackKind: S.combat.attackKind,
       attackCd: S.combat.attackCd, lastKind: S.combat.lastKind, lastAt: S.combat.lastAt,
     },
-    vehicle: S.currentCar ? { model: S.currentCar.model, heading: S.currentCar.heading, speed: S.currentCar.speed, health: S.currentCar.health } : null,
+    vehicle: S.currentCar ? { model: S.currentCar.model, heading: S.currentCar.heading, speed: S.currentCar.speed, health: S.currentCar.health, hardHits: S.currentCar.hardHits, exploded: S.currentCar.exploded } : null,
     feedback: { hits: S.feedback.hits, flashes: S.feedback.flashes },
     prompt: S.prompt,
     shopOpen: S.shopOpen,
@@ -439,9 +464,61 @@ function stateSnapshot() {
   };
 }
 
+// In-page motion recorder: probes read frame-accurate series (speed,
+// joint angles, camera azimuth) without CDP sampling lag.
+const motionLog = [];
+function recordMotion() {
+  const J = playerAnim.joints || {};
+  motionLog.push({
+    t: Math.round(S.time * 1000) / 1000,
+    x: Math.round(S.p.x * 100) / 100, z: Math.round(S.p.z * 100) / 100,
+    speed: Math.round(S.p.speed * 100) / 100,
+    camYaw: Math.round(camYaw * 1000) / 1000,
+    armL: J.armL || 0, armR: J.armR || 0, legL: J.legL || 0, legR: J.legR || 0,
+    foreL: J.foreL || 0, foreR: J.foreR || 0, shinL: J.shinL || 0, shinR: J.shinR || 0,
+    torsoX: J.torsoX || 0, headYaw: J.headYaw || 0,
+  });
+  if (motionLog.length > 4000) motionLog.splice(0, motionLog.length - 4000);
+}
+
 window.PB = {
   state: stateSnapshot,
   camInfo: () => ({ yaw: camYaw, x: camera.position.x, y: camera.position.y, z: camera.position.z }),
+  hudInfo,
+  audioInfo,
+  phaseInfo,
+  setPhase: (name) => setPhase(name),
+  worldInfo: () => ({
+    colliders: S.colliders.map((c) => ({ minX: c.minX, maxX: c.maxX, minZ: c.minZ, maxZ: c.maxZ })),
+    roadLines: ROAD_LINES, park: PARK, counts: WORLD_COUNTS,
+    sidewalkOffset: 7.35,
+  }),
+  pedPositions,
+  carsInfo: () => S.cars.map((c) => ({ ...carInfo(c), x: Math.round(c.x * 10) / 10, z: Math.round(c.z * 10) / 10, traffic: c.traffic, speed: Math.round(c.speed * 100) / 100 })),
+  myCarInfo: () => carInfo(S.currentCar),
+  joints: () => (playerAnim.joints ? { ...playerAnim.joints } : null),
+  motionLog: () => motionLog.slice(),
+  clearMotion: () => { motionLog.length = 0; },
+  setJoy: (x, y) => {
+    S.input.joyX = x; S.input.joyY = y;
+    S.input.joyActive = Math.abs(x) > 0.05 || Math.abs(y) > 0.05;
+  },
+  placeNPC: (kind, x, z) => {
+    const rec = S.npcs.find((n) => n.kind === kind && n.state !== 'dead' && n.state !== 'down' && n.state !== 'dead');
+    if (!rec) return null;
+    rec.x = x; rec.z = z;
+    // stand at the staged spot briefly (one waypoint on the spot), then
+    // resume normal life - the staging never freezes anyone forever
+    rec.waypoints = [[x, z]];
+    rec.retargetT = 2.5;
+    if (rec.state !== 'wander' && rec.state !== 'stand') rec.state = 'wander';
+    rec.group.position.set(x, 0, z);
+    return { kind: rec.kind, x: rec.x, z: rec.z };
+  },
+  npcInfo: (kind) => S.npcs.filter((n) => n.kind === kind).map((n) => ({
+    kind: n.kind, state: n.state, x: Math.round(n.x * 10) / 10, z: Math.round(n.z * 10) / 10,
+    hasHealth: 'health' in n, health: 'health' in n ? n.health : null,
+  })),
   counts: countsSnapshot,
   debugCars: () => ({
     parked: S.cars.filter((c) => !c.traffic).map((c) => ({ x: c.x, z: c.z, model: c.model, heading: c.heading, len: c.len, wid: c.wid })),
@@ -468,7 +545,7 @@ window.PB = {
   },
   teleportNear: (kind, armedFirst) => {
     const wantKind = kind === 'citizen' ? 'citizen' : kind;
-    let pool = S.npcs.filter((n) => n.kind === wantKind && n.state !== 'down');
+    let pool = S.npcs.filter((n) => n.kind === wantKind && n.state !== 'down' && n.state !== 'dead');
     if (wantKind === 'thug' && armedFirst) {
       const armed = pool.filter((n) => n.armed);
       if (armed.length) pool = armed;
@@ -489,7 +566,7 @@ window.PB = {
   commitCrime: () => punchNearest(),
   punchNearest: () => punchNearest(),
   spawnWitnessCrime: () => {
-    const near = nearestNPC(S.p.x, S.p.z, (n) => n.kind !== 'child' && n.kind !== 'animal' && n.state !== 'down');
+    const near = nearestNPC(S.p.x, S.p.z, (n) => n.kind !== 'child' && n.kind !== 'animal' && n.state !== 'down' && n.state !== 'dead');
     if (!near) return { raised: false, stars: W.stars, witness: null, cd: 0, dlg: S.dialogOpen, mode: S.mode, dist: -1 };
     const rec = near.rec;
     rec.x = S.p.x + Math.sin(S.p.heading) * 1.6;
@@ -553,6 +630,19 @@ function setupShot(name) {
     startMission(1);
     hideDialog();
     S.p.x = -6; S.p.z = 66; S.p.heading = 0.5; camYaw = 0.5;
+  } else if (name === 'night') {
+    if (S.inCar) exitCar();
+    setPhase('night');
+    S.p.x = 8; S.p.z = 44; S.p.heading = -0.7; camYaw = -0.7;
+  } else if (name === 'car') {
+    // close-up of the parked Baruna by the shore road: structure study
+    if (S.inCar) exitCar();
+    const car = S.cars.find((c) => !c.traffic);
+    car.x = 3; car.z = 70; car.heading = Math.PI / 2; car.speed = 0;
+    syncCarMesh(car);
+    S.p.x = 7.2; S.p.z = 66.8;
+    S.p.heading = Math.atan2(car.x - S.p.x, car.z - S.p.z);
+    camYaw = S.p.heading;
   } else if (name === 'crowd') {
     if (S.inCar) exitCar();
     S.p.x = 0; S.p.z = 30; S.p.heading = Math.PI; camYaw = Math.PI;
@@ -636,9 +726,24 @@ function loop() {
       updatePolice(scene, sdt);
       updateArrest(sdt);
       updateDrops(sdt);
+      recordMotion(); // per-substep: ramps and joint steps stay visible
       if (S.mode !== 'playing') break;
     }
     checkDamageFeedback();
+    updateVehicleFx(dt);
+    // drain queued camera drag at a capped azimuth rate (3.2 rad/s):
+    // a flick can never whip the view around in a single frame
+    if (pendingYaw !== 0) {
+      const step = clamp(pendingYaw, -3.2 * dt, 3.2 * dt);
+      camYaw += step; pendingYaw -= step;
+    }
+    if (pendingPitch !== 0) {
+      const step = clamp(pendingPitch, -1.8 * dt, 1.8 * dt);
+      const before = camPitch;
+      camPitch = clamp(camPitch + step, -0.12, 0.6);
+      pendingPitch -= (camPitch - before);
+      if (camPitch === before) pendingPitch = 0;
+    }
     if (S.health < 100) S.health = Math.min(100, S.health + dt * 0.7);
     if (S.health <= 0 && S.mode === 'playing') endGame('wasted');
     sirenUpdate(W.stars);
@@ -651,6 +756,7 @@ function loop() {
     }
     if (worldRefs.sea) worldRefs.sea.position.y = -0.25 + Math.sin(S.time * 0.7) * 0.05;
   }
+  updateDayNight();
   updatePrompt();
   updateCamera();
   updateHUD(weaponsSnapshot());

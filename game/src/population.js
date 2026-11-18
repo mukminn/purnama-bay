@@ -4,7 +4,9 @@
 import * as THREE from 'three';
 import { S, CFG, dist2d, pushOut, pushOutCars, clamp } from './config.js';
 import { makePerson, makePersonRecord, makeAnimal, animatePerson, animateAnimal } from './characters.js';
-import { PLACES } from './world.js';
+import { PLACES, ROAD_LINES, SIDEWALK_OFFSET, isRoad, isSidewalk, inPark, PARK, groundYAt } from './world.js';
+import { reportCrime } from './wanted.js';
+import { sfx } from './audio.js';
 
 export const CENSUS = { citizen: 16, shopkeeper: 5, dockworker: 6, child: 5, animal: 6, thug: 5 };
 
@@ -22,6 +24,98 @@ function scatter(half, avoid) {
   return [(Math.random() * 2 - 1) * half, (Math.random() * 2 - 1) * half];
 }
 
+// ------------------------------------------------------------------
+// The pedestrian network. People live on the sidewalks: a wander target
+// is a point on a pavement strip, in the park, or at a pedestrian post,
+// and the route to it follows the strips - along one strip to the
+// corner, then along the crossing strip - so a walker only ever leaves
+// the pavement at an intersection corner (where the zebras are).
+function randomSidewalkPoint() {
+  const r = ROAD_LINES[Math.floor(Math.random() * ROAD_LINES.length)];
+  const s = Math.random() < 0.5 ? -SIDEWALK_OFFSET : SIDEWALK_OFFSET;
+  const t = -138 + Math.random() * 276;
+  return Math.random() < 0.5 ? [r + s, t] : [t, r + s];
+}
+function randomParkPoint() {
+  return [PARK.x + (Math.random() * 2 - 1) * (PARK.halfW - 2), PARK.z + (Math.random() * 2 - 1) * (PARK.halfD - 2)];
+}
+// Which strip lines (if any) a point sits on: {v: x} for a vertical
+// strip (constant x), {h: z} for a horizontal strip (constant z).
+function stripLines(x, z) {
+  let v = null; let h = null;
+  for (const r of ROAD_LINES) {
+    if (Math.abs(Math.abs(x - r) - SIDEWALK_OFFSET) < 1.1) v = x;
+    if (Math.abs(Math.abs(z - r) - SIDEWALK_OFFSET) < 1.1) h = z;
+  }
+  return { v, h };
+}
+function nearestStripPoint(x, z) {
+  let best = [x, z]; let bd = Infinity;
+  for (const r of ROAD_LINES) {
+    for (const s of [-SIDEWALK_OFFSET, SIDEWALK_OFFSET]) {
+      const d1 = Math.abs(x - (r + s)); if (d1 < bd) { bd = d1; best = [r + s, z]; }
+      const d2 = Math.abs(z - (r + s)); if (d2 < bd) { bd = d2; best = [x, r + s]; }
+    }
+  }
+  return best;
+}
+// The park gate: the pavement corner south-east of Purnama Green,
+// where the -80 avenue's east strip meets the 80 avenue's north strip.
+const PARK_GATE = [ROAD_LINES[1] - SIDEWALK_OFFSET, ROAD_LINES[5] + SIDEWALK_OFFSET];
+
+// Build a waypoint route from (x, z) to a target that keeps the walker
+// on the pavement network the whole way. Park targets route via the
+// gate corner; everything else is pure strip routing (routeStrips).
+function routeTo(x, z, tx, tz) {
+  if (inPark(tx, tz) && !inPark(x, z)) {
+    const pts = routeStrips(x, z, PARK_GATE[0], PARK_GATE[1]);
+    pts.push([tx, tz]);
+    return pts;
+  }
+  if (inPark(x, z) && !inPark(tx, tz)) {
+    const pts = [[PARK_GATE[0], PARK_GATE[1]]];
+    pts.push(...routeStrips(PARK_GATE[0], PARK_GATE[1], tx, tz));
+    return pts;
+  }
+  if (inPark(x, z) && inPark(tx, tz)) return [[tx, tz]];
+  return routeStrips(x, z, tx, tz);
+}
+
+function routeStrips(x, z, tx, tz) {
+  const pts = [];
+  let cx = x; let cz = z;
+  let cur = stripLines(cx, cz);
+  if (cur.v === null && cur.h === null) {
+    const sp = nearestStripPoint(cx, cz);
+    pts.push(sp); cx = sp[0]; cz = sp[1]; cur = stripLines(cx, cz);
+  }
+  const tgt = stripLines(tx, tz);
+  if (tgt.v !== null && cur.v !== null && Math.abs(tgt.v - cur.v) < 0.6) { pts.push([tx, tz]); return pts; }
+  if (tgt.h !== null && cur.h !== null && Math.abs(tgt.h - cur.h) < 0.6) { pts.push([tx, tz]); return pts; }
+  // change strips at a corner: ride the current strip to the target's
+  // crossing strip, turn, then ride that strip to the target
+  if (cur.v !== null && tgt.h !== null) { pts.push([cur.v, tgt.h]); pts.push([tx, tz]); return pts; }
+  if (cur.h !== null && tgt.v !== null) { pts.push([tgt.v, cur.h]); pts.push([tx, tz]); return pts; }
+  if (cur.v !== null && tgt.v !== null) {
+    const hz = nearestStripLineZ(tz);
+    pts.push([cur.v, hz]); pts.push([tgt.v, hz]); pts.push([tx, tz]); return pts;
+  }
+  if (cur.h !== null && tgt.h !== null) {
+    const vx = nearestStripLineX(tx);
+    pts.push([vx, cur.h]); pts.push([vx, tgt.h]); pts.push([tx, tz]); return pts;
+  }
+  pts.push([tx, tz]);
+  return pts;
+}
+function nearestStripLineZ(z) {
+  let best = 0; let bd = Infinity;
+  for (const r of ROAD_LINES) for (const s of [-SIDEWALK_OFFSET, SIDEWALK_OFFSET]) {
+    const d = Math.abs(z - (r + s)); if (d < bd) { bd = d; best = r + s; }
+  }
+  return best;
+}
+function nearestStripLineX(x) { return nearestStripLineZ(x); }
+
 function addPerson(scene, kind, x, z, opts) {
   const group = makePerson(opts);
   group.position.set(x, 0, z);
@@ -33,31 +127,36 @@ function addPerson(scene, kind, x, z, opts) {
 
 export function buildPopulation(scene) {
   const hideCorner = { x: 130, z: -95 }; // kept empty: the quiet corner
+  void hideCorner;
+  // citizens and children start ON the pavement network / in the park
   for (let i = 0; i < CENSUS.citizen; i++) {
-    const [x, z] = scatter(WANDER_HALF, hideCorner);
+    const [x, z] = i % 4 === 3 ? randomParkPoint() : randomSidewalkPoint();
     addPerson(scene, 'citizen', x, z, {});
   }
   const shopSpots = [
     [CFG.shopDoor.x - 3, CFG.shopDoor.z - 2], [PLACES.cafe.x + 3, PLACES.cafe.z - 2],
-    [PLACES.garage.x + 4, PLACES.garage.z - 2], [PLACES.hotel.x + 4, PLACES.hotel.z - 2],
-    [-6, 76],
+    [PLACES.garage.x + 4, PLACES.garage.z - 2], [-72, -24],
+    [-10, 72],
   ];
   for (const [x, z] of shopSpots) {
     const rec = addPerson(scene, 'shopkeeper', x, z, { cap: 0x31435c });
     rec.state = 'stand'; rec.homeX = x; rec.homeZ = z;
   }
+  // dockworkers pace the pier apron, clear of every carriageway band
+  const dockXs = [-30, -23, -16, -9, 9, 16];
   for (let i = 0; i < CENSUS.dockworker; i++) {
-    const x = -34 + i * 8 + (i % 2) * 3;
+    const x = dockXs[i % dockXs.length];
     const z = 96 + (i % 3) * 5;
     const rec = addPerson(scene, 'dockworker', x, z, { shirt: 0xd96f32, cap: 0xf5e9b8 });
     rec.homeX = x; rec.homeZ = z;
   }
   for (let i = 0; i < CENSUS.child; i++) {
-    const [x, z] = scatter(50, hideCorner);
+    const [x, z] = i % 2 === 0 ? randomParkPoint() : randomSidewalkPoint();
     addPerson(scene, 'child', x, z, { scale: 0.62, skirt: i % 2 === 0 });
   }
-  // syndicate thugs loiter near the warehouse and the docks; two are armed
-  const thugSpots = [[78, -52], [88, -74], [-24, 88], [70, -58], [-40, 100]];
+  // syndicate thugs loiter ON pavements near the warehouse and the
+  // docks; two are armed
+  const thugSpots = [[87.35, -52], [87.35, -74], [-24, 87.35], [72.65, -52], [-30, 100]];
   thugSpots.forEach(([x, z], i) => {
     const rec = addPerson(scene, 'thug', x, z, { shirt: 0x23272c, pants: 0x17191c, cap: 0x101214 });
     rec.armed = i % 2 === 0;
@@ -75,11 +174,22 @@ export function buildPopulation(scene) {
   return mira;
 }
 
+// Kill an adult outright (a car impact at speed). The state is 'dead'
+// and it is PERMANENT: no downT, no getting back up - the body stays.
+// Children can never reach this function (see checkCarHits).
+export function killNPC(rec) {
+  if (!rec || rec.kind === 'child' || rec.kind === 'animal') return false;
+  rec.state = 'dead';
+  rec.health = 0;
+  rec.animSpeed = 0;
+  return true;
+}
+
 // Damage entry point for every person in the bay. The child law is enforced
 // here first: a child record has no health and this function refuses it.
 export function damageNPC(rec, dmg) {
   if (!rec || rec.kind === 'child') return 'immune';
-  if (rec.state === 'down') return 'down';
+  if (rec.state === 'down' || rec.state === 'dead') return 'down';
   if (rec.kind === 'animal') { rec.state = 'flee'; rec.fleeT = 3; return 'fled'; }
   rec.health -= dmg;
   if (rec.health <= 0) {
@@ -96,7 +206,7 @@ export function damageNPC(rec, dmg) {
 // Scare everyone near a point (a swing, a shot, a crash).
 export function scareArea(x, z, radius) {
   for (const n of S.npcs) {
-    if (n.state === 'down' || n.kind === 'thug') continue;
+    if (n.state === 'down' || n.state === 'dead' || n.kind === 'thug') continue;
     if (dist2d(n.x, n.z, x, z) < radius) { n.state = 'flee'; n.fleeT = 2.5; n.fleeX = x; n.fleeZ = z; }
   }
 }
@@ -117,9 +227,49 @@ function steer(rec, tx, tz, speed, dt) {
   return false;
 }
 
+// ------------------------------------------------------------------
+// Cars vs people. A car moving at speed checks its own footprint
+// against every person each tick:
+//  - an ADULT inside the footprint is killed outright (killNPC) - with
+//    the crash sound, a scare ripple, and, when it is the player's car,
+//    a crime report through the normal witnessed wanted pipeline;
+//  - a CHILD is never touched: the child darts sideways out of the
+//    car's path, whole and unharmed, and keeps no health to lose;
+//  - animals scatter.
+function checkCarHits(n) {
+  for (const c of S.cars) {
+    if (c.dead) continue;
+    const spd = Math.abs(c.speed);
+    if (spd < 2.4) continue;
+    const dx = n.x - c.x; const dz = n.z - c.z;
+    if (dx * dx + dz * dz > 16) continue;
+    const fx = Math.sin(c.heading); const fz = Math.cos(c.heading);
+    const rx = Math.cos(c.heading); const rz = -Math.sin(c.heading);
+    const lf = dx * fx + dz * fz;
+    const lr = dx * rx + dz * rz;
+    if (Math.abs(lf) > (c.len || 4.4) / 2 + 0.25 || Math.abs(lr) > (c.wid || 1.85) / 2 + 0.3) continue;
+    if (n.kind === 'child') {
+      // dart aside, perpendicular to the car's travel, whole and safe
+      const side = lr >= 0 ? 1 : -1;
+      n.x += rx * side * 1.6; n.z += rz * side * 1.6;
+      n.state = 'flee'; n.fleeT = 2.2; n.fleeX = c.x; n.fleeZ = c.z;
+      n.waypoints = [];
+      return;
+    }
+    if (n.kind === 'animal') { n.state = 'flee'; n.fleeT = 3; n.fleeX = c.x; n.fleeZ = c.z; return; }
+    if (killNPC(n)) {
+      sfx.crash(spd >= CFG.hardHitSpeed);
+      scareArea(n.x, n.z, 9);
+      if (S.currentCar === c && S.inCar) reportCrime(n.x, n.z, n);
+    }
+    return;
+  }
+}
+
 export function updatePopulation(dt) {
   const p = S.p;
   for (const n of S.npcs) {
+    if (n.state === 'dead') { syncMesh(n); continue; } // a body stays a body
     if (n.state === 'down') {
       n.downT -= dt;
       if (n.downT <= 0 && n.kind !== 'child') {
@@ -128,6 +278,8 @@ export function updatePopulation(dt) {
       }
       syncMesh(n); continue;
     }
+    if (n.kind !== 'animal') checkCarHits(n);
+    if (n.state === 'dead') { syncMesh(n); continue; }
     if (n.state === 'stand') {
       n.animSpeed = 0;
       // shopkeepers and Mira idle at home, turning slowly to watch the street
@@ -156,15 +308,48 @@ export function updatePopulation(dt) {
           S.health -= n.armed ? 7 : 4;
         }
       }
-    } else { // wander
+    } else { // wander - along the pavement network, waypoint by waypoint
       n.retargetT -= dt;
-      const arrived = steer(n, n.tx, n.tz, n.kind === 'animal' ? 1.7 : (n.kind === 'child' ? 2.4 : 1.35), dt);
-      if (arrived || n.retargetT <= 0) {
-        n.retargetT = 4 + Math.random() * 6;
-        if (n.homeX !== undefined && Math.random() < 0.6) { n.tx = n.homeX + (Math.random() * 8 - 4); n.tz = n.homeZ + (Math.random() * 8 - 4); }
-        else { const [x, z] = scatter(60, null); n.tx = n.x + clamp(x, -40, 40); n.tz = n.z + clamp(z, -40, 40); }
-        n.tx = clamp(n.tx, -WANDER_HALF, WANDER_HALF);
-        n.tz = clamp(n.tz, -WANDER_HALF, WANDER_HALF + 14);
+      if (n.kind === 'animal') {
+        const arrived = steer(n, n.tx, n.tz, 1.7, dt);
+        if (arrived || n.retargetT <= 0) {
+          n.retargetT = 4 + Math.random() * 6;
+          const [x, z] = scatter(60, null);
+          n.tx = clamp(n.x + clamp(x, -40, 40), -WANDER_HALF, WANDER_HALF);
+          n.tz = clamp(n.z + clamp(z, -40, 40), -WANDER_HALF, WANDER_HALF + 14);
+        }
+      } else {
+        if (!n.waypoints) n.waypoints = [];
+        if (!n.waypoints.length && n.retargetT <= 0) {
+          n.retargetT = 6 + Math.random() * 8;
+          let tx; let tz;
+          if (n.homeX !== undefined && n.kind === 'dockworker') {
+            tx = n.homeX + (Math.random() * 6 - 3); tz = n.homeZ + (Math.random() * 6 - 3);
+            if (isRoad(tx, tz)) { tx = n.homeX; tz = n.homeZ; }
+            n.waypoints = [[tx, tz]];
+          } else if (n.homeX !== undefined && Math.random() < 0.45) {
+            // home-based kinds stroll to a pavement point near home
+            const hx = n.homeX + (Math.random() * 10 - 5); const hz = n.homeZ + (Math.random() * 10 - 5);
+            const sp = nearestStripPoint(hx, hz);
+            n.waypoints = routeTo(n.x, n.z, sp[0], sp[1]);
+          } else if (Math.random() < 0.22) {
+            const [px2, pz2] = randomParkPoint();
+            n.waypoints = routeTo(n.x, n.z, px2, pz2);
+          } else {
+            const [sx, sz] = randomSidewalkPoint();
+            n.waypoints = routeTo(n.x, n.z, sx, sz);
+          }
+          const last = n.waypoints[n.waypoints.length - 1];
+          if (last) { n.tx = last[0]; n.tz = last[1]; }
+        }
+        const wp = n.waypoints[0];
+        if (wp) {
+          const arrived = steer(n, wp[0], wp[1], n.kind === 'child' ? 2.4 : 1.35, dt);
+          if (arrived) n.waypoints.shift();
+        } else {
+          n.animSpeed = 0;
+          if (n.retargetT > 2.5) n.retargetT = 2.5; // brief pause, then stroll on
+        }
       }
     }
     const probe = { x: n.x, z: n.z };
@@ -181,7 +366,15 @@ export function updatePopulation(dt) {
 function syncMesh(n) {
   n.group.position.x = n.x;
   n.group.position.z = n.z;
-  if (n.state !== 'down') n.group.position.y = 0;
+  if (n.state === 'down' || n.state === 'dead') {
+    // fallen: flat on the ground, and a dead body never gets up again
+    n.group.rotation.x = -Math.PI / 2;
+    n.group.position.y = 0.25;
+  } else {
+    n.group.rotation.x = 0;
+    // feet follow the pavement: 0.12 on a sidewalk, 0 elsewhere
+    n.group.position.y = n.kind === 'animal' ? 0 : groundYAt(n.x, n.z);
+  }
   n.group.rotation.y = n.heading;
 }
 
@@ -201,13 +394,25 @@ export function countsSnapshot() {
       hasHealth: 'health' in n,
       state: n.state,
     })),
+    deadCount: S.npcs.filter((n) => n.state === 'dead').length,
   };
+}
+
+// Position census for the pedestrian-network probe: every human's
+// position, kind, state and whether they are on a carriageway.
+export function pedPositions() {
+  return S.npcs.filter((n) => n.kind !== 'animal').map((n) => ({
+    kind: n.kind, x: Math.round(n.x * 10) / 10, z: Math.round(n.z * 10) / 10,
+    state: n.state, onRoad: isRoad(n.x, n.z), onSidewalk: isSidewalk(n.x, n.z),
+    inPark: inPark(n.x, n.z), animSpeed: Math.round(n.animSpeed * 100) / 100,
+    hasHealth: 'health' in n,
+  }));
 }
 
 // Adults who could plausibly witness something at a point (probe + wanted).
 export function adultsNear(x, z, radius) {
   return S.npcs.filter((n) => n.kind !== 'child' && n.kind !== 'animal'
-    && n.state !== 'down' && dist2d(x, z, n.x, n.z) <= radius);
+    && n.state !== 'down' && n.state !== 'dead' && dist2d(x, z, n.x, n.z) <= radius);
 }
 
 export function nearestNPC(x, z, filter) {

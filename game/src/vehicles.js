@@ -43,49 +43,101 @@ function buildCarMesh(model, colorOverride) {
   const paintColor = colorOverride !== undefined ? colorOverride : spec.color;
   const g = new THREE.Group();
   const pickup = model === 'Tangguh Pickup';
-  // side profile: nose low and sloped, windscreen rising to a flat roof,
-  // short sloped tail. The pickup gets a forward cab and an open bed.
+  // side profile: nose low and sloped (the HOOD), windscreen rising to a
+  // flat roof, short sloped tail (the TRUNK). The pickup gets a forward
+  // cab and an open bed.
   const bodyPts = pickup
     ? [[-L / 2, 0.30], [L / 2, 0.30], [L / 2, 0.78], [L * 0.34, 0.86], [L * 0.26, 1.42], [L * 0.02, 1.46], [-L * 0.06, 0.92], [-L / 2, 0.90]]
     : [[-L / 2, 0.30], [L / 2, 0.30], [L / 2, 0.68], [L * 0.30, 0.82], [L * 0.10, 1.30], [-L * 0.16, 1.34], [-L * 0.30, 0.86], [-L / 2, 0.82]];
-  // The whole car is four draw calls: metallic paint (profile + roof
-  // panel merged), the glass canopy, one merged dark assembly (bumpers,
-  // wheels, arch discs, bed, stripe) and one merged lamp strip.
   const roofLen = pickup ? L * 0.17 : L * 0.26;
   const roofZ = pickup ? L * 0.10 : -L * 0.025;
-  const paintMesh = new THREE.Mesh(mergeColored([
+  const roofY = pickup ? 1.475 : 1.365;
+  // PAINT assembly (one merged mesh): body profile, roof panel, the
+  // A/B/C cabin pillars, mirror stalks and the hood/trunk shut-lines.
+  const paintParts = [
     { geo: profileGeometry(bodyPts, Wd), color: paintColor },
-    { geo: new THREE.BoxGeometry(Wd * 0.8, 0.055, roofLen), color: paintColor, y: pickup ? 1.475 : 1.365, z: roofZ },
-  ]), new THREE.MeshPhongMaterial({ vertexColors: true, shininess: 70, specular: 0x8fa8bf }));
+    { geo: new THREE.BoxGeometry(Wd * 0.8, 0.055, roofLen), color: paintColor, y: roofY, z: roofZ },
+  ];
+  const pillar = (z, y, h, rx) => {
+    for (const sx of [-1, 1]) paintParts.push({ geo: new THREE.BoxGeometry(0.07, h, 0.09), color: paintColor, x: sx * Wd * 0.40, y, z, rx });
+  };
+  if (!pickup) {
+    pillar(L * 0.115, 1.13, 0.52, -0.5);   // A pillars, raked with the windscreen
+    pillar(-L * 0.01, 1.16, 0.5, 0);       // B pillars, upright
+    pillar(-L * 0.155, 1.13, 0.5, 0.45);   // C pillars, raked with the rear screen
+  } else {
+    pillar(L * 0.115, 1.16, 0.55, -0.45);
+    pillar(-L * 0.03, 1.18, 0.55, 0.1);
+  }
+  for (const sx of [-1, 1]) { // mirror stalks in paint, heads in dark trim
+    paintParts.push({ geo: new THREE.BoxGeometry(0.16, 0.04, 0.05), color: paintColor, x: sx * (Wd / 2 + 0.07), y: 1.12, z: L * 0.16 });
+  }
+  const paintMesh = new THREE.Mesh(mergeColored(paintParts),
+    new THREE.MeshPhongMaterial({ vertexColors: true, shininess: 70, specular: 0x8fa8bf }));
   paintMesh.castShadow = true;
+  paintMesh.name = 'car-paint';
   g.add(paintMesh);
-  // glasshouse: one narrower sloped band fused into the body profile -
-  // windscreen, side glass and rear screen read as a single canopy
-  const glassPts = pickup
-    ? [[L * 0.245, 0.90], [L * 0.175, 1.38], [L * 0.035, 1.41], [-L * 0.045, 0.92]]
-    : [[L * 0.265, 0.84], [L * 0.095, 1.265], [-L * 0.145, 1.30], [-L * 0.265, 0.87]];
-  const canopy = new THREE.Mesh(profileGeometry(glassPts, Wd * 0.82),
-    new THREE.MeshPhongMaterial({ color: 0x16283a, shininess: 130, specular: 0xcfe8ff }));
-  g.add(canopy);
+  // GLASS assembly (its own glossy material, separate from paint):
+  // windscreen, rear screen and both side windows as distinct panes
+  // sitting between the pillars.
+  const glassMat = new THREE.MeshPhongMaterial({ color: 0x1b3049, shininess: 160, specular: 0xd8f0ff });
+  const glassParts = [];
+  const GLASS = 0x2a4a6a;
+  const wsZ = pickup ? L * 0.155 : L * 0.185; const wsRx = pickup ? -0.62 : -0.72;
+  glassParts.push({ geo: new THREE.PlaneGeometry(Wd * 0.74, 0.52), color: GLASS, y: 1.13, z: wsZ, rx: wsRx }); // windscreen
+  glassParts.push({ geo: new THREE.PlaneGeometry(Wd * 0.72, 0.46), color: GLASS, y: 1.13, z: pickup ? -L * 0.045 : -L * 0.20, rx: Math.PI - (pickup ? 0.35 : 0.62), ry: Math.PI }); // rear screen
+  for (const sx of [-1, 1]) {
+    glassParts.push({ geo: new THREE.PlaneGeometry(roofLen * 0.92, 0.4), color: GLASS, x: sx * (Wd * 0.415), y: 1.15, z: roofZ, ry: sx * Math.PI / 2 }); // side windows
+  }
+  const glassMesh = new THREE.Mesh(mergeColored(glassParts),
+    new THREE.MeshPhongMaterial({ vertexColors: true, shininess: 160, specular: 0xd8f0ff }));
+  void glassMat;
+  glassMesh.name = 'car-glass';
+  g.add(glassMesh);
+  // DARK TRIM assembly: front/rear bumpers, wheel-arch discs, mirror
+  // heads, door handles, pickup bed, patrol stripe.
   const DARK = 0x14181d;
   const darkParts = [
-    { geo: new THREE.BoxGeometry(Wd * 0.96, 0.16, 0.14), color: DARK, y: 0.38, z: L / 2 + 0.03 },
-    { geo: new THREE.BoxGeometry(Wd * 0.96, 0.16, 0.14), color: DARK, y: 0.38, z: -L / 2 - 0.03 },
+    { geo: new THREE.BoxGeometry(Wd * 0.96, 0.16, 0.14), color: DARK, y: 0.38, z: L / 2 + 0.03 },  // front bumper
+    { geo: new THREE.BoxGeometry(Wd * 0.96, 0.16, 0.14), color: DARK, y: 0.38, z: -L / 2 - 0.03 }, // rear bumper
   ];
   if (pickup) darkParts.push({ geo: new THREE.BoxGeometry(Wd * 0.94, 0.34, L * 0.34), color: DARK, y: 0.78, z: -L * 0.30 });
   if (model === 'Patrol Unit') darkParts.push({ geo: new THREE.BoxGeometry(Wd + 0.03, 0.18, L * 0.62), color: DARK, y: 0.58 });
-  // wheels pushed out to the body's edge, dark arch disc behind each
+  for (const sx of [-1, 1]) {
+    darkParts.push({ geo: new THREE.BoxGeometry(0.05, 0.11, 0.2), color: DARK, x: sx * (Wd / 2 + 0.15), y: 1.12, z: L * 0.16 }); // mirror head
+    darkParts.push({ geo: new THREE.BoxGeometry(0.03, 0.045, 0.34), color: 0x2c343a, x: sx * (Wd / 2 + 0.045), y: 0.94, z: L * 0.02 });  // front door handle
+    darkParts.push({ geo: new THREE.BoxGeometry(0.03, 0.045, 0.34), color: 0x2c343a, x: sx * (Wd / 2 + 0.045), y: 0.94, z: -L * 0.20 }); // rear door handle
+  }
+  // fender arch discs behind each wheel
   for (const [wx, wz] of [[-Wd / 2, L * 0.32], [Wd / 2, L * 0.32], [-Wd / 2, -L * 0.32], [Wd / 2, -L * 0.32]]) {
-    darkParts.push({ geo: new THREE.CylinderGeometry(0.35, 0.35, 0.26, 14), color: DARK, x: wx, y: 0.35, z: wz, rz: Math.PI / 2 });
     darkParts.push({ geo: new THREE.CircleGeometry(0.47, 14, 0, Math.PI), color: DARK, x: wx + (wx < 0 ? -0.045 : 0.045), y: 0.35, z: wz, ry: wx < 0 ? -Math.PI / 2 : Math.PI / 2 });
   }
-  g.add(new THREE.Mesh(mergeColored(darkParts), coloredLambert));
+  const trimMesh = new THREE.Mesh(mergeColored(darkParts), coloredLambert);
+  trimMesh.name = 'car-trim';
+  g.add(trimMesh);
+  // TYRES: near-black rubber, its own material - visibly distinct from
+  // the lighter alloy HUBCAPS merged separately below.
+  const tyreParts = []; const hubParts = [];
+  for (const [wx, wz] of [[-Wd / 2, L * 0.32], [Wd / 2, L * 0.32], [-Wd / 2, -L * 0.32], [Wd / 2, -L * 0.32]]) {
+    tyreParts.push({ geo: new THREE.CylinderGeometry(0.35, 0.35, 0.24, 14), color: 0x0c0d0f, x: wx, y: 0.35, z: wz, rz: Math.PI / 2 });
+    hubParts.push({ geo: new THREE.CylinderGeometry(0.17, 0.17, 0.26, 10), color: 0xb9c2c9, x: wx, y: 0.35, z: wz, rz: Math.PI / 2 });
+  }
+  const tyreMesh = new THREE.Mesh(mergeColored(tyreParts), coloredLambert);
+  tyreMesh.name = 'car-tyres';
+  g.add(tyreMesh);
+  const hubMesh = new THREE.Mesh(mergeColored(hubParts),
+    new THREE.MeshPhongMaterial({ vertexColors: true, shininess: 110, specular: 0xffffff }));
+  hubMesh.name = 'car-hubs';
+  g.add(hubMesh);
+  // LAMPS: pale headlights at the nose, red tail lights at the tail.
   const lampParts = [];
   for (const sx of [-1, 1]) {
     lampParts.push({ geo: new THREE.BoxGeometry(0.34, 0.11, 0.06), color: 0xffe9b0, x: sx * Wd * 0.32, y: 0.62, z: L / 2 + 0.055 });
     lampParts.push({ geo: new THREE.BoxGeometry(0.36, 0.10, 0.06), color: 0xd92b3a, x: sx * Wd * 0.32, y: 0.66, z: -L / 2 - 0.055 });
   }
-  g.add(new THREE.Mesh(mergeColored(lampParts), coloredBasic));
+  const lampMesh = new THREE.Mesh(mergeColored(lampParts), coloredBasic);
+  lampMesh.name = 'car-lamps';
+  g.add(lampMesh);
   if (model === 'Patrol Unit') {
     const bar = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.13, 0.38),
       new THREE.MeshBasicMaterial({ color: 0xff4444 }));
@@ -93,7 +145,8 @@ function buildCarMesh(model, colorOverride) {
     g.add(bar);
     g.userData.lightBar = bar;
   }
-  g.userData.wheels = []; // wheels are merged into the dark assembly now
+  g.userData.wheels = []; // wheels are merged into the tyre/hub assemblies
+  g.userData.structure = ['paint', 'glass', 'trim', 'tyres', 'hubs', 'lamps'];
   return g;
 }
 
@@ -108,6 +161,7 @@ function makeCarRecord(scene, model, x, z, heading, traffic, colorOverride) {
     speed: 0, traffic: !!traffic,
     hasDriver: !!traffic,
     health: 100, dead: false,
+    hardHits: 0, exploded: false, fx: null, lastCrashAt: -10,
     axis: Math.random() < 0.5 ? 'x' : 'z',
     line: 0, dir: 1, cruise: 7 + Math.random() * 3,
     isTarget: false, isStolen: false,
@@ -192,17 +246,120 @@ export function driveStep(car, dt, throttle, steer, brake) {
   car.x = clamp(car.x, -CFG.worldHalf + 2, CFG.worldHalf - 2);
   car.z = clamp(car.z, -CFG.worldHalf + 2, CFG.worldHalf + 20);
   const probe = { x: car.x, z: car.z };
+  const preX = probe.x; const preZ = probe.z;
   pushOut(probe, 1.5);
+  const hitWall = Math.abs(probe.x - preX) > 0.01 || Math.abs(probe.z - preZ) > 0.01;
   // solid against other cars: the driven car is resolved out of every
   // other car's box (its own bulk counts as 0.45 of its length), so it
   // crumples to a stop instead of ghosting through parked or moving cars
   const hitCar = pushOutCars(probe, spec.len * 0.45, car);
-  if (hitCar || Math.abs(probe.x - car.x) > 0.01 || Math.abs(probe.z - car.z) > 0.01) {
+  if (hitCar || hitWall) {
     car.x = probe.x; car.z = probe.z;
-    if (Math.abs(car.speed) > 7) damageCar(car, (Math.abs(car.speed) - 6) * 1.4);
+    const impact = Math.abs(car.speed);
+    // one impact = one crash event (impacts in the same 0.35 s are the
+    // same crunch, not several): light scrape vs hard hit sound differ,
+    // and only HARD hits into solid scenery count toward the explosion
+    if (impact > 2.2 && S.time - car.lastCrashAt > 0.35) {
+      car.lastCrashAt = S.time;
+      const hard = hitWall && impact >= CFG.hardHitSpeed;
+      sfx.crash(hard);
+      if (hard && !car.exploded) {
+        car.hardHits++;
+        if (car.hardHits >= CFG.hardHitsToExplode) explodeCar(car);
+      }
+    }
+    // collision damage is deliberately gentler than the hard-hit
+    // counter: ten hard hits must be reachable before the shell dies,
+    // because the tenth is what blows the car up (see explodeCar)
+    if (impact > 7) damageCar(car, (impact - 6) * 0.75);
     car.speed *= 0.35;
   }
   syncCarMesh(car);
+}
+
+// ------------------------------------------------------------------
+// The tenth HARD hit: the car explodes. Fire/smoke particles, an orange
+// point light, the explosion sound, a scorched-black shell that can no
+// longer be driven. A driver inside is thrown clear with heavy but
+// survivable damage - never an instant death.
+export function explodeCar(car) {
+  if (car.exploded) return;
+  car.exploded = true;
+  car.dead = true;
+  car.health = 0;
+  const wasDriving = S.currentCar === car && S.inCar;
+  car.speed = 0;
+  sfx.explosion();
+  // scorch: every painted/glass surface goes charcoal (materials are
+  // cloned per car first so the fleet does not share the burn)
+  car.group.traverse((o) => {
+    if (o.isMesh) {
+      o.material = o.material.clone();
+      if (o.material.color) o.material.color.setHex(0x17181a);
+      if ('vertexColors' in o.material) o.material.vertexColors = false;
+    }
+  });
+  // particle burst: 70 points of fire and smoke with per-point velocity
+  const N = 70;
+  const pos = new Float32Array(N * 3);
+  const vel = [];
+  for (let i = 0; i < N; i++) {
+    pos[i * 3] = car.x; pos[i * 3 + 1] = 0.8; pos[i * 3 + 2] = car.z;
+    const a = Math.random() * Math.PI * 2;
+    vel.push([Math.sin(a) * (1 + Math.random() * 2.4), 2.4 + Math.random() * 3.6, Math.cos(a) * (1 + Math.random() * 2.4)]);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  const mat = new THREE.PointsMaterial({ color: 0xff7a26, size: 0.55, transparent: true, opacity: 1 });
+  const points = new THREE.Points(geo, mat);
+  points.name = 'explosion-fx';
+  car.group.parent.add(points);
+  const light = new THREE.PointLight(0xff7a26, 60, 17, 1.8);
+  light.position.set(car.x, 1.6, car.z);
+  car.group.parent.add(light);
+  car.fx = { points, light, vel, t: 0, active: true };
+  if (wasDriving) {
+    // thrown clear of the wreck, hurt but alive
+    exitCar();
+    S.p.x = car.x + 3.4; S.p.z = car.z + 2.2;
+    pushOut(S.p, 0.55);
+    S.health = Math.max(18, S.health - 26);
+  }
+}
+
+// Animate live explosion effects (called from the main loop).
+export function updateVehicleFx(dt) {
+  for (const car of S.cars) {
+    const fx = car.fx;
+    if (!fx || !fx.active) continue;
+    fx.t += dt;
+    const pos = fx.points.geometry.attributes.position;
+    for (let i = 0; i < fx.vel.length; i++) {
+      pos.array[i * 3] += fx.vel[i][0] * dt;
+      pos.array[i * 3 + 1] += fx.vel[i][1] * dt;
+      pos.array[i * 3 + 2] += fx.vel[i][2] * dt;
+      fx.vel[i][1] -= 1.6 * dt; // fire rises then settles into smoke
+    }
+    pos.needsUpdate = true;
+    fx.points.material.color.setHex(fx.t < 0.7 ? 0xff7a26 : 0x555049); // flame -> smoke
+    fx.points.material.opacity = Math.max(0, 1 - fx.t / 2.6);
+    fx.light.intensity = Math.max(0, 60 * (1 - fx.t / 1.4));
+    if (fx.t > 2.6) { fx.active = false; fx.points.visible = false; fx.light.intensity = 0; }
+  }
+}
+
+// Read-only car census for probes: structure, damage and explosion state.
+export function carInfo(car) {
+  if (!car) return null;
+  const names = [];
+  car.group.traverse((o) => { if (o.isMesh && o.name) names.push(o.name); });
+  return {
+    model: car.model, health: Math.round(car.health), dead: car.dead,
+    hardHits: car.hardHits, exploded: car.exploded,
+    fxActive: !!(car.fx && car.fx.active),
+    fxLight: car.fx ? Math.round(car.fx.light.intensity) : 0,
+    structure: names,
+  };
 }
 
 export function damageCar(car, dmg) {
