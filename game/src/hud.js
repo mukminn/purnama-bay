@@ -4,6 +4,7 @@
 import { S, CFG } from './config.js';
 import { drawPortrait } from './textures.js';
 import { W } from './wanted.js';
+import { PLACES, PARK, ROAD_LINES } from './world.js';
 
 const el = {};
 let minimapTarget = null;
@@ -45,11 +46,11 @@ export function hudInfo() {
 }
 
 export function initHUD(hooks) {
-  for (const id of ['objective', 'stats', 'minimap', 'minimap-wrap', 'prompt',
+  for (const id of ['toast', 'stats', 'minimap', 'minimap-wrap', 'prompt',
     'hud-money', 'hud-health-fill', 'hud-stars', 'hud-weapon', 'speedo',
     'dialog', 'dialog-name', 'dialog-text', 'dialog-portrait', 'dialog-next',
     'shop', 'shop-msg', 'shop-money', 'banner',
-    'dmg-vignette', 'dmg-dir', 'hitmarker']) {
+    'dmg-vignette', 'dmg-dir', 'hitmarker', 'bigmap', 'map-overlay']) {
     el[id] = document.getElementById(id);
   }
   el['dialog-next'].addEventListener('click', () => { hideDialog(); if (hooks && hooks.onDialog) hooks.onDialog(); });
@@ -58,12 +59,41 @@ export function initHUD(hooks) {
   });
   const close = document.getElementById('shop-close');
   if (close) close.addEventListener('click', () => closeShop());
+  const wrap = document.getElementById('minimap-wrap');
+  if (wrap) wrap.addEventListener('click', () => { if (hooks && hooks.onMap) hooks.onMap(); });
+  const mapClose = document.getElementById('map-close');
+  if (mapClose) mapClose.addEventListener('click', () => { if (hooks && hooks.onMap) hooks.onMap(); });
 }
 
+// ------------------------------------------------------------------
+// Objective TOAST: the stage label appears centred at the top, stays
+// ~4 s, then fades away - it never sits on screen permanently. Setting
+// the same text twice in a row is ignored; empty text hides it at once.
+let toastText = '';
+let toastShownAt = 0;
+let toastVisible = false;
 export function setObjective(text) {
-  // ONE short line only: the stage label, never a paragraph. Long
-  // labels are clipped by CSS ellipsis on the same single line.
-  if (el.objective) el.objective.textContent = text || '';
+  const t = text || '';
+  if (!el.toast) return;
+  if (!t) {
+    toastText = '';
+    toastVisible = false;
+    el.toast.style.opacity = '0';
+    return;
+  }
+  if (t === toastText && toastVisible) return;
+  toastText = t;
+  el.toast.textContent = t;
+  el.toast.style.opacity = '1';
+  toastVisible = true;
+  toastShownAt = performance.now();
+}
+export function toastInfo() {
+  return {
+    text: toastText,
+    visible: toastVisible,
+    shownAgoMs: toastShownAt ? Math.round(performance.now() - toastShownAt) : -1,
+  };
 }
 
 export function showBanner(text) {
@@ -158,6 +188,11 @@ export function updateHUD(weaponSnap) {
     const k = Math.max(0, 1 - (now - hitAt) / 220);
     el['hitmarker'].style.opacity = k.toFixed(3);
   }
+  // the objective toast fades out 4 s after it was shown
+  if (toastVisible && el.toast && now - toastShownAt > 4000) {
+    toastVisible = false;
+    el.toast.style.opacity = '0';
+  }
   drawMinimap();
 }
 
@@ -237,4 +272,118 @@ function drawMinimap() {
   g.font = 'bold 11px system-ui, sans-serif';
   g.textAlign = 'center';
   g.fillText('N', half, 13);
+}
+
+// ------------------------------------------------------------------
+// The full city map overlay: the whole bay on one 1000x800 canvas -
+// water, land slab, beach, the road grid, building blocks, the park,
+// the pier, place labels, live police / thug dots, the gold objective
+// marker and the player's white arrow. World extent x [-165, 165],
+// z [-165, 185], north (+z) up.
+let mapOpenFlag = false;
+let mapDrewPlayer = false;
+let mapDrewObjective = false;
+export function isMapOpen() { return mapOpenFlag; }
+export function mapInfo() {
+  return { open: mapOpenFlag, player: mapDrewPlayer, objective: mapDrewObjective };
+}
+export function openMap() {
+  drawBigMap();
+  const ov = document.getElementById('map-overlay');
+  if (ov) ov.style.display = 'flex';
+  mapOpenFlag = true;
+}
+export function closeMap() {
+  const ov = document.getElementById('map-overlay');
+  if (ov) ov.style.display = 'none';
+  mapOpenFlag = false;
+}
+export function toggleMap() {
+  if (mapOpenFlag) closeMap(); else openMap();
+  return mapOpenFlag;
+}
+export function drawBigMap() {
+  const c = el.bigmap || document.getElementById('bigmap');
+  if (!c) return;
+  const g = c.getContext('2d');
+  const Wd = c.width; const Ht = c.height;
+  const sx = Wd / 330; const sy = Ht / 350;
+  const scale = (sx + sy) / 2;
+  const X = (x) => (x + 165) * sx;
+  const Y = (z) => Ht - (z + 165) * sy;
+  // water everywhere first
+  g.fillStyle = '#14607e'; g.fillRect(0, 0, Wd, Ht);
+  // the city land slab + beach band
+  g.fillStyle = '#9a8f74';
+  g.fillRect(X(-148), Y(148), 296 * sx, 296 * sy);
+  g.fillStyle = '#e6cf9a';
+  g.fillRect(X(-148), Y(161), 296 * sx, 26 * sy);
+  // roads, both axes
+  g.strokeStyle = '#2e3237';
+  g.lineWidth = 13 * scale;
+  for (const r of ROAD_LINES) {
+    g.beginPath(); g.moveTo(X(r), 0); g.lineTo(X(r), Ht); g.stroke();
+    g.beginPath(); g.moveTo(0, Y(r)); g.lineTo(Wd, Y(r)); g.stroke();
+  }
+  // building blocks
+  for (const b of S.colliders) {
+    g.fillStyle = '#a8763e';
+    g.strokeStyle = 'rgba(40,26,14,0.8)'; g.lineWidth = 1;
+    const bx = X(b.minX); const by = Y(b.maxZ);
+    const bw = (b.maxX - b.minX) * sx; const bh = (b.maxZ - b.minZ) * sy;
+    g.fillRect(bx, by, bw, bh);
+    g.strokeRect(bx, by, bw, bh);
+  }
+  // the park
+  g.fillStyle = '#3e7d3a';
+  g.fillRect(X(PARK.x - PARK.halfW), Y(PARK.z + PARK.halfD), PARK.halfW * 2 * sx, PARK.halfD * 2 * sy);
+  // the pier deck
+  g.fillStyle = '#8a6844';
+  g.fillRect(X(PLACES.pier.x - 5), Y(182), 10 * sx, 44 * sy);
+  // labels
+  g.fillStyle = '#ffffff';
+  g.font = 'bold 13px system-ui, sans-serif';
+  g.textAlign = 'center';
+  const label = (txt, x, z) => {
+    g.strokeStyle = 'rgba(10,16,24,0.85)'; g.lineWidth = 3;
+    g.strokeText(txt, X(x), Y(z));
+    g.fillText(txt, X(x), Y(z));
+  };
+  label('PURNAMA ARMS', CFG.shopDoor.x, CFG.shopDoor.z);
+  label('MIRA', CFG.miraSpot.x, CFG.miraSpot.z);
+  label('SAFEHOUSE', CFG.safehouse.x, CFG.safehouse.z);
+  label('HOTEL BULAN', PLACES.hotel.x, PLACES.hotel.z);
+  label('GUDANG PELITA', PLACES.warehouse.x, PLACES.warehouse.z);
+  label('PURNAMA GREEN', PARK.x, PARK.z);
+  label('PIER', PLACES.pier.x, PLACES.pier.z);
+  const dot = (x, z, color, r) => {
+    g.fillStyle = color;
+    g.beginPath(); g.arc(X(x), Y(z), r, 0, Math.PI * 2); g.fill();
+  };
+  for (const n of S.npcs) if (n.kind === 'thug') dot(n.x, n.z, '#3a3f45', 4);
+  for (const u of S.policeUnits) dot(u.x, u.z, '#ff3b30', 5);
+  dot(CFG.shopDoor.x, CFG.shopDoor.z, '#7ec8e3', 5);
+  mapDrewObjective = !!minimapTarget;
+  if (minimapTarget) {
+    dot(minimapTarget.x, minimapTarget.z, '#ffd34d', 6);
+    g.strokeStyle = '#ffd34d'; g.lineWidth = 2.5;
+    g.beginPath(); g.arc(X(minimapTarget.x), Y(minimapTarget.z), 11, 0, Math.PI * 2); g.stroke();
+  }
+  // player arrow, rotated by the velocity heading (same maths as the
+  // minimap arrow: world +z is canvas up, rotation is the heading)
+  const velA = (S.p.moving || Math.abs(S.p.speed) > 0.2) ? S.p.velHeading : S.p.heading;
+  g.save();
+  g.translate(X(S.p.x), Y(S.p.z));
+  g.rotate(velA);
+  g.fillStyle = '#ffffff';
+  g.strokeStyle = '#1d2733'; g.lineWidth = 1.5;
+  g.beginPath(); g.moveTo(0, -10); g.lineTo(7, 8); g.lineTo(0, 4); g.lineTo(-7, 8); g.closePath();
+  g.fill(); g.stroke();
+  g.restore();
+  g.fillStyle = '#ffffff';
+  g.font = 'bold 12px system-ui, sans-serif';
+  g.strokeStyle = 'rgba(10,16,24,0.85)'; g.lineWidth = 3;
+  g.strokeText('YOU', X(S.p.x), Y(S.p.z) - 14);
+  g.fillText('YOU', X(S.p.x), Y(S.p.z) - 14);
+  mapDrewPlayer = true;
 }

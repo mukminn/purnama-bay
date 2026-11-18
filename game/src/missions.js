@@ -7,6 +7,7 @@ import { PLACES } from './world.js';
 import { reportCrime, clearWanted } from './wanted.js';
 import { nearestNPC } from './population.js';
 import { sfx } from './audio.js';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.min.js';
 
 export const MISSIONS = [
   {
@@ -127,8 +128,8 @@ function setupStage() {
     const spots = [[-26, 100], [-12, 108], [-20, 96]];
     for (const [x, z] of spots) {
       const mesh = new THREE.Mesh(
-        new THREE.BoxGeometry(0.9, 0.9, 0.9),
-        new THREE.MeshLambertMaterial({ color: 0xc9973f }));
+        new RoundedBoxGeometry(0.9, 0.9, 0.9, 2, 0.06),
+        new THREE.MeshStandardMaterial({ color: 0xc9973f, roughness: 0.8 }));
       mesh.position.set(x, 0.45, z);
       mesh.castShadow = true;
       sceneRef.add(mesh);

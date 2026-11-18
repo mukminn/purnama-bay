@@ -48,5 +48,5 @@ export function mergeColored(parts) {
   return out;
 }
 
-// One shared material for every merged vertex-coloured Lambert assembly.
-export const coloredLambert = new THREE.MeshLambertMaterial({ vertexColors: true });
+// One shared material for every merged vertex-coloured PBR assembly.
+export const coloredStandard = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.88, metalness: 0.02, envMapIntensity: 0.35 });

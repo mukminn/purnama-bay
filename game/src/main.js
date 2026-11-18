@@ -4,7 +4,7 @@
 // hook the automated probes drive the real game through.
 import * as THREE from 'three';
 import { CFG, S, clamp, angleLerp, pushOut, pushOutCars, dist2d } from './config.js';
-import { buildWorld, PLACES, updateDayNight, setPhase, phaseInfo, WORLD_COUNTS, ROAD_LINES, PARK, groundYAt } from './world.js';
+import { buildWorld, PLACES, updateDayNight, setPhase, phaseInfo, WORLD_COUNTS, ROAD_LINES, PARK, groundYAt, bindScene, WX, setWeather, updateWeather, weatherRoadInfo, lightState, setLightAxis, lightForcedAxis, updateTrafficLights } from './world.js';
 import { buildPopulation, updatePopulation, countsSnapshot, nearestNPC, scareArea, pedPositions } from './population.js';
 import { makePerson, animatePerson } from './characters.js';
 import { buildVehicles, nearestEnterableCar, driveStep, updateTraffic, enterCar, exitCar, syncCarMesh, updateVehicleFx, carInfo } from './vehicles.js';
@@ -12,9 +12,10 @@ import { W, wantedSnapshot, updateWanted, noteVehicleSwap, noteClothesChange, cl
 import { updatePolice, policeDebug, nearestPoliceDist } from './police.js';
 import { WPN, weaponsSnapshot, selectWeapon, buyItem, meleeAttack, punchNearest, shoot, initDrops, updateDrops, dropsInfo, pickupDropAt, flushBufferedAttack } from './weapons.js';
 import { MISSIONS, M, startMission, updateMissions, missionSnapshot, missionsInit, setStealCar, stageFinaleCrime } from './missions.js';
-import { initHUD, setObjective, showBanner, showDialog, hideDialog, setPrompt, openShop, closeShop, refreshShop, updateHUD, setMinimapTarget, showDamage, hudInfo } from './hud.js';
+import { initHUD, setObjective, showBanner, showDialog, hideDialog, setPrompt, openShop, closeShop, refreshShop, updateHUD, setMinimapTarget, showDamage, hudInfo, toastInfo, openMap, closeMap, isMapOpen, mapInfo } from './hud.js';
 import { initTouch, refreshTouchVisibility } from './touch.js';
 import { audioInit, sfx, sirenUpdate, audioToggleMute, audioInfo } from './audio.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.min.js';
 
 const SAVE_KEY = 'purnama-bay-save-v1';
 
@@ -29,35 +30,59 @@ const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFShadowMap;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.12;
+renderer.toneMappingExposure = 1.18;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 container.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
+// PBR image-based lighting: a neutral room environment baked through
+// PMREM gives every Standard/Physical surface something real to reflect
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+scene.environmentIntensity = 0.55;
 const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.1, 900);
 let camYaw = Math.PI;
 let camPitch = 0; // drag-orbit elevation: 0 = the classic follow height
 let pendingYaw = 0; // queued drag azimuth, drained at a capped rate
 let pendingPitch = 0;
+let camMode = 'third'; // W4: 'third' | 'first'
+
+// W4/E: the full-map toggle is game-level: opening the map pauses the
+// world, closing resumes; an open shop swallows the key entirely.
+function toggleMapGame() {
+  if (S.shopOpen) return;
+  if (isMapOpen()) { closeMap(); pauseGame(false); return; }
+  if (S.mode === 'playing') { openMap(); pauseGame(true); }
+}
+function toggleCamMode() {
+  camMode = camMode === 'third' ? 'first' : 'third';
+  return camMode;
+}
 
 const worldRefs = buildWorld(scene);
+bindScene(scene);
 const mira = buildPopulation(scene);
 void mira;
 const stealCar = buildVehicles(scene);
 setStealCar(stealCar);
 initDrops(scene);
 
-// Raka Pradana, the player avatar (separate head mesh: it turns)
-const playerGroup = makePerson({ shirt: 0x12716b, pants: 0x2c343a, skin: 0xa06a42, headSeparate: true });
+// Raka Pradana, the player avatar (separate head mesh: it turns).
+// The player is built 'tall'; NPC body variety lives in population.js.
+const playerGroup = makePerson({ shirt: 0x12716b, pants: 0x2c343a, skin: 0xa06a42, headSeparate: true, build: 'tall' });
 scene.add(playerGroup);
-const playerAnim = { group: playerGroup, animSpeed: 0, animPhase: 0, state: 'wander', baseScale: 1, crouchVisual: false };
+const playerAnim = {
+  group: playerGroup, animSpeed: 0, animPhase: 0, state: 'wander',
+  build: playerGroup.userData.buildName || 'tall',
+  baseScale: playerGroup.userData.baseScaleY ?? 1, crouchVisual: false,
+};
 
 // a soft disc marker that floats over the current mission target
 const marker = new THREE.Mesh(
   new THREE.CylinderGeometry(1.6, 1.6, 14, 20, 1, true),
-  new THREE.MeshBasicMaterial({ color: 0xffd34d, transparent: true, opacity: 0.3, side: THREE.DoubleSide, depthWrite: false }));
+  new THREE.MeshStandardMaterial({ color: 0xffd34d, emissive: 0xffd34d, emissiveIntensity: 0.7, transparent: true, opacity: 0.3, side: THREE.DoubleSide, depthWrite: false }));
 marker.visible = false;
 scene.add(marker);
 
@@ -68,6 +93,7 @@ missionsInit(scene, {
 initHUD({
   onBuy: (item) => { const msg = buyItem(item); refreshShop(msg); },
   onDialog: () => {},
+  onMap: () => toggleMapGame(),
 });
 
 // ---------------------------------------------------------------- run state
@@ -211,7 +237,7 @@ function tryInteract() {
   if (dist2d(S.p.x, S.p.z, CFG.shopDoor.x, CFG.shopDoor.z) < 4.6) { openShop(); return; }
   if (dist2d(S.p.x, S.p.z, CFG.safehouse.x, CFG.safehouse.z) < 4.5) {
     noteClothesChange();
-    playerGroup.userData.parts.torso.material = new THREE.MeshLambertMaterial({ color: 0xc9973f });
+    playerGroup.userData.parts.torso.material = new THREE.MeshStandardMaterial({ color: 0xc9973f, roughness: 0.85 });
     showBanner('Fresh shirt. The description of Raka fades.');
     return;
   }
@@ -247,8 +273,15 @@ window.addEventListener('keydown', (e) => {
     case 'Digit1': selectWeapon('baton'); break;
     case 'Digit2': selectWeapon('pistol'); break;
     case 'Digit3': selectWeapon('fists'); break;
-    case 'KeyM': audioToggleMute(); break;
-    case 'KeyP': case 'Escape':
+    case 'KeyM': toggleMapGame(); break;
+    case 'KeyN': audioToggleMute(); break;
+    case 'KeyV': if (S.mode === 'playing') toggleCamMode(); break;
+    case 'Escape':
+      if (isMapOpen()) { toggleMapGame(); break; }
+      if (S.shopOpen) closeShop();
+      else if (S.mode === 'playing' || S.mode === 'paused') pauseGame(S.mode === 'playing');
+      break;
+    case 'KeyP':
       if (S.shopOpen) closeShop();
       else if (S.mode === 'playing' || S.mode === 'paused') pauseGame(S.mode === 'playing');
       break;
@@ -271,6 +304,8 @@ initTouch({
   onAct,
   onJump: doJump,
   onHit: () => { if (WPN.active === 'pistol') shoot(); else meleeAttack('punch'); },
+  onMap: () => toggleMapGame(),
+  onCamMode: () => { if (S.mode === 'playing') toggleCamMode(); },
   // camera drag (touch right half / mouse on canvas): drags feed a
   // pending pool instead of snapping the azimuth - the loop drains the
   // pool at a capped rate (3.2 rad/s), so even a fast flick can never
@@ -317,7 +352,8 @@ function updatePlayer(dt) {
     p.velHeading = car.speed >= 0 ? car.heading : car.heading + Math.PI;
     p.moving = Math.abs(car.speed) > 0.3;
     playerGroup.visible = false;
-    camYaw = angleLerp(camYaw, car.heading, Math.min(1, dt * 3.2));
+    // G: free GTA-style camera - the azimuth NEVER chases the car; only
+    // the player's drag (and explicit one-shot setups) move camYaw
     return;
   }
   playerGroup.visible = true;
@@ -348,7 +384,8 @@ function updatePlayer(dt) {
       Math.sin(camYaw) * iz - Math.cos(camYaw) * ix,
       Math.cos(camYaw) * iz + Math.sin(camYaw) * ix);
     p.heading = angleLerp(p.heading, dirWorld, Math.min(1, dt * 14));
-    camYaw = angleLerp(camYaw, p.heading, Math.min(1, dt * 4.5));
+    // G: free camera on foot too - camYaw is the player's to drag, the
+    // heading follows the input, never the other way around
   }
   // Analogue ramp: the ground speed CHASES the target at a fixed
   // acceleration (30 m/s^2), so a stick flick reaches full run in
@@ -422,6 +459,46 @@ function currentTarget() {
 
 function updateCamera() {
   const p = S.p;
+  // W4 first-person: the camera sits in the head. On foot it looks
+  // along camYaw with camPitch as the view pitch; in a car it sits at
+  // the driver's seat and looks along the car's heading, with camYaw
+  // allowed to glance sideways within a clamp.
+  if (camMode === 'first') {
+    const parts = playerGroup.userData.parts;
+    if (S.inCar && S.currentCar) {
+      const car = S.currentCar;
+      if (parts && parts.headMesh) parts.headMesh.visible = false;
+      // driver seat offset in car space: left seat, eye height, slight fwd
+      const lx = -0.42; const lz = 0.1;
+      const fx = Math.sin(car.heading); const fz = Math.cos(car.heading);
+      const rx = Math.cos(car.heading); const rz = -Math.sin(car.heading);
+      camera.position.set(car.x + rx * lx + fx * lz, 1.08, car.z + rz * lx + fz * lz);
+      let glance = camYaw - car.heading;
+      while (glance > Math.PI) glance -= Math.PI * 2;
+      while (glance < -Math.PI) glance += Math.PI * 2;
+      glance = clamp(glance, -1.3, 1.3);
+      const lookYaw = car.heading + glance;
+      const pitch = clamp(camPitch, -0.9, 0.9);
+      camera.lookAt(
+        camera.position.x + Math.sin(lookYaw) * Math.cos(pitch),
+        camera.position.y + Math.sin(pitch),
+        camera.position.z + Math.cos(lookYaw) * Math.cos(pitch));
+      S.cameraY = camera.position.y;
+      return;
+    }
+    if (parts && parts.headMesh) parts.headMesh.visible = false;
+    const eyeY = p.y + p.groundY + 1.62 * playerGroup.scale.y;
+    camera.position.set(p.x, eyeY, p.z);
+    const pitch = clamp(-camPitch * 1.2, -0.9, 0.9);
+    camera.lookAt(
+      p.x + Math.sin(camYaw) * Math.cos(pitch),
+      eyeY + Math.sin(pitch),
+      p.z + Math.cos(camYaw) * Math.cos(pitch));
+    S.cameraY = camera.position.y;
+    return;
+  }
+  const parts = playerGroup.userData.parts;
+  if (parts && parts.headMesh) parts.headMesh.visible = true;
   const dist = S.inCar ? 8.2 : CFG.camDistance;
   const h = S.inCar ? CFG.camHeightCar : (p.crouch ? CFG.camHeightCrouch : CFG.camHeightStand);
   // drag pitch raises the camera on its orbit sphere and shortens the
@@ -476,7 +553,7 @@ function recordMotion() {
     camYaw: Math.round(camYaw * 1000) / 1000,
     armL: J.armL || 0, armR: J.armR || 0, legL: J.legL || 0, legR: J.legR || 0,
     foreL: J.foreL || 0, foreR: J.foreR || 0, shinL: J.shinL || 0, shinR: J.shinR || 0,
-    torsoX: J.torsoX || 0, headYaw: J.headYaw || 0,
+    torsoX: J.torsoX || 0, torsoYaw: J.torsoYaw || 0, headYaw: J.headYaw || 0,
   });
   if (motionLog.length > 4000) motionLog.splice(0, motionLog.length - 4000);
 }
@@ -527,7 +604,73 @@ window.PB = {
   }),
   debugPolice: policeDebug,
   dropsInfo,
-  renderInfo: () => ({ calls: renderer.info.render.calls, triangles: renderer.info.render.triangles }),
+  renderInfo: () => {
+    // material census: every Mesh/InstancedMesh in the scene by type -
+    // after the PBR conversion the only 'other' left should be the
+    // sky dome's backdrop material (Points are not surfaces, excluded)
+    let standard = 0; let physical = 0; const other = [];
+    scene.traverse((o) => {
+      if (!o.isMesh && !o.isInstancedMesh) return;
+      const m = o.material;
+      if (!m) return;
+      if (m.isMeshPhysicalMaterial) physical++;
+      else if (m.isMeshStandardMaterial) standard++;
+      else other.push({ type: m.type, name: o.name || '' });
+    });
+    return {
+      calls: renderer.info.render.calls, triangles: renderer.info.render.triangles,
+      three: THREE.REVISION,
+      toneMapping: renderer.toneMapping === THREE.ACESFilmicToneMapping ? 'ACESFilmic' : 'other',
+      env: !!scene.environment,
+      materials: { standard, physical, other },
+    };
+  },
+  bodyInfo: () => {
+    const counts = {};
+    let distinct = 0;
+    for (const n of S.npcs) {
+      if (n.kind === 'animal') continue;
+      const b = n.build || 'average';
+      if (!(b in counts)) { counts[b] = 0; distinct++; }
+      counts[b]++;
+    }
+    return { distinct, counts, player: playerGroup.userData.buildName || 'average' };
+  },
+  toastInfo,
+  mapInfo,
+  openMap: () => { if (!isMapOpen()) toggleMapGame(); return isMapOpen(); },
+  closeMap: () => { if (isMapOpen()) toggleMapGame(); return isMapOpen(); },
+  toggleMap: () => { toggleMapGame(); return isMapOpen(); },
+  weatherInfo: () => ({
+    state: WX.state,
+    wetness: Math.round(WX.wetness * 100) / 100,
+    cloudiness: Math.round(WX.cloudiness * 100) / 100,
+    rain: Math.round(WX.rain * 100) / 100,
+    fogFar: Math.round(scene.fog.far),
+    ...weatherRoadInfo(),
+    particles: !!(WX.rainPoints && WX.rainPoints.visible),
+  }),
+  setWeather: (name) => setWeather(name),
+  trafficLightInfo: () => ({ ...lightState(), mode: lightForcedAxis() ? `forced-${lightForcedAxis()}` : 'auto' }),
+  setLightAxis: (axis) => setLightAxis(axis),
+  stageCarAtLight: () => {
+    // stage the nearest traffic car on the x=0 avenue's +z lane, 26 m
+    // south of the (0,0) intersection, heading +z at cruise entry speed
+    let best = null; let bd = Infinity;
+    for (const c of S.cars) {
+      if (!c.traffic || c.dead) continue;
+      const d = Math.hypot(c.x - 3, c.z + 26);
+      if (d < bd) { bd = d; best = c; }
+    }
+    if (!best) return null;
+    best.axis = 'z'; best.line = 3; best.dir = 1;
+    best.x = 3; best.z = -26; best.heading = 0;
+    best.speed = 6;
+    syncCarMesh(best);
+    return { x: best.x, z: best.z, heading: best.heading };
+  },
+  camMode: () => camMode,
+  setCamMode: (m) => { if (m === 'first' || m === 'third') camMode = m; return camMode; },
   teleport: (x, z) => {
     if (S.inCar && S.currentCar) {
       S.currentCar.x = x; S.currentCar.z = z;
@@ -731,6 +874,8 @@ function loop() {
     }
     checkDamageFeedback();
     updateVehicleFx(dt);
+    updateWeather(dt);
+    updateTrafficLights(dt);
     // drain queued camera drag at a capped azimuth rate (3.2 rad/s):
     // a flick can never whip the view around in a single frame
     if (pendingYaw !== 0) {

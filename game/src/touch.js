@@ -85,7 +85,7 @@ export function initTouch(hooks) {
   // joystick, a button or any panel never rotate the camera, and button
   // taps keep working because those touches are claimed elsewhere.
   const isUiTarget = (t) => !!(t && t.closest
-    && t.closest('#joy-base, .tbtn, button, #dialog, #shop, #menu, #end-overlay, #rotate-overlay'));
+    && t.closest('#joy-base, .tbtn, button, #dialog, #shop, #menu, #end-overlay, #rotate-overlay, #map-overlay, #minimap-wrap'));
   let camTouchId = null;
   let camLast = { x: 0, y: 0 };
   window.addEventListener('touchstart', (e) => {
@@ -137,6 +137,8 @@ export function initTouch(hooks) {
   bindButton('btn-brake',
     () => { S.input.brakeTouch = true; },
     () => { S.input.brakeTouch = false; });
+  bindButton('btn-map', () => { if (hooks && hooks.onMap) hooks.onMap(); });
+  bindButton('btn-cam', () => { if (hooks && hooks.onCamMode) hooks.onCamMode(); });
 }
 
 // Current stick deflection as a plain snapshot (debug + future gamepad).

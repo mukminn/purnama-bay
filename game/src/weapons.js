@@ -155,7 +155,8 @@ export function initDrops(scene) {
 
 export function spawnDrop(weapon, x, z) {
   const geo = new THREE.TorusGeometry(0.85, 0.09, 8, 24);
-  const mat = new THREE.MeshBasicMaterial({ color: weapon === 'pistol' ? 0xffd34d : 0x7ec8e3 });
+  const dropColor = weapon === 'pistol' ? 0xffd34d : 0x7ec8e3;
+  const mat = new THREE.MeshStandardMaterial({ color: dropColor, emissive: dropColor, emissiveIntensity: 0.9, roughness: 0.4 });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.rotation.x = Math.PI / 2;
   mesh.position.set(x, 0.35, z);

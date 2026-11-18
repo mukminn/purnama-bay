@@ -5,7 +5,8 @@
 // children are built WITHOUT any health field on purpose - the safety law
 // of the game is that a child can never be hurt, and the data shows it.
 import * as THREE from 'three';
-import { mergeColored, coloredLambert } from './merge.js';
+import { mergeColored, coloredStandard } from './merge.js';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.min.js';
 
 const SKIN = [0xc98a5e, 0xa06a42, 0x8a5a34, 0xe0aa72];
 const SHIRTS = [0xd96f32, 0x0f7d8c, 0x3f7d4e, 0xc9973f, 0xb8452e, 0x7a4a8c, 0x2e5f8a, 0xe8e3d5];
@@ -14,15 +15,30 @@ const PANTS = [0x2c343a, 0x4a3b2a, 0x31435c, 0x5c5142, 0x704214];
 let seed = 7;
 function pick(arr) { seed = (seed * 16807) % 2147483647; return arr[seed % arr.length]; }
 
-// A tapered limb as ONE mesh whose geometry hangs below its origin, so
-// the mesh origin IS the joint (shoulder / hip) and rotating the mesh
-// swings the limb from its real pivot, the way animatePerson expects.
-function taperedLimb(rTop, rBottom, len, mat, jx, jy, flat = 1) {
-  const geo = new THREE.CylinderGeometry(rTop, rBottom, len, 7);
+// Body variety: every person is built in one of four frames. The group
+// is scaled (w, h, w) around the person's own scale factor, so a crowd
+// reads as individuals instead of clones at one height.
+export const BUILDS = {
+  slim: { h: 0.98, w: 0.90 },
+  average: { h: 1.0, w: 1.0 },
+  tall: { h: 1.07, w: 0.97 },
+  broad: { h: 1.01, w: 1.15 },
+};
+
+// A capsule limb segment as ONE merged vertex-coloured mesh whose
+// geometry hangs below its origin, so the mesh origin IS the joint
+// (shoulder / hip / elbow / knee) and rotating the mesh swings the limb
+// from its real pivot. Joint spheres (shoulder, elbow, hip, knee),
+// hands and shoes are baked into the same merge, so the mesh count per
+// person never grows - capsules just replace the old tapered cylinders.
+function capsuleSegment(r, len, color) {
+  const geo = new THREE.CapsuleGeometry(r, len - 2 * r, 4, 10);
   geo.translate(0, -len / 2, 0);
-  if (flat !== 1) geo.scale(1, 1, flat);
-  const m = new THREE.Mesh(geo, mat);
-  m.position.set(jx, jy, 0);
+  return { geo, color };
+}
+function limbMesh(parts) {
+  const m = new THREE.Mesh(mergeColored(parts), coloredStandard);
+  m.castShadow = true;
   return m;
 }
 
@@ -35,14 +51,19 @@ function taperedLimb(rTop, rBottom, len, mat, jx, jy, flat = 1) {
 // can still repaint it. opts: {shirt, pants, skin, cap, scale, skirt}
 export function makePerson(opts = {}) {
   const s = opts.scale || 1;
+  const build = BUILDS[opts.build] || BUILDS.average;
   const g = new THREE.Group();
   const skin = opts.skin ?? pick(SKIN);
-  const shirtMat = new THREE.MeshLambertMaterial({ color: opts.shirt ?? pick(SHIRTS) });
+  const shirtColor = opts.shirt ?? pick(SHIRTS);
+  const shirtMat = new THREE.MeshStandardMaterial({ color: shirtColor, roughness: 0.85, metalness: 0 });
   const pants = opts.pants ?? pick(PANTS);
   const coreParts = [
-    { geo: new THREE.BoxGeometry(0.36, 0.18, 0.22), color: pants, y: 0.92 },
+    // pelvis: a squashed sphere in trouser colour, not a box
+    { geo: new THREE.SphereGeometry(0.19, 10, 8), color: pants, y: 0.95, sx: 1.05, sy: 0.62, sz: 0.72 },
     { geo: new THREE.SphereGeometry(0.145, 10, 8), color: skin, y: 1.70, sx: 0.92, sy: 1.08, sz: 0.98 },
     { geo: new THREE.SphereGeometry(0.152, 10, 6, 0, Math.PI * 2, 0, Math.PI * 0.52), color: 0x241a12, y: 1.725, z: -0.012, sx: 0.94, sy: 1.02, sz: 1.0 },
+    // neck between torso and head
+    { geo: new THREE.CylinderGeometry(0.05, 0.05, 0.09, 8), color: skin, y: 1.60 },
   ];
   if (opts.cap) {
     coreParts.push({ geo: new THREE.SphereGeometry(0.155, 10, 5, 0, Math.PI * 2, 0, Math.PI * 0.45), color: opts.cap, y: 1.735, sx: 0.95, sy: 0.8, sz: 1.0 });
@@ -56,50 +77,64 @@ export function makePerson(opts = {}) {
   let core; let headMesh = null;
   if (opts.headSeparate) {
     const headParts = coreParts.splice(1, 2); // head sphere + hair cap
-    core = new THREE.Mesh(mergeColored(coreParts), coloredLambert);
-    headMesh = new THREE.Mesh(mergeColored(headParts), coloredLambert);
+    core = new THREE.Mesh(mergeColored(coreParts), coloredStandard);
+    headMesh = new THREE.Mesh(mergeColored(headParts), coloredStandard);
     headMesh.castShadow = true;
     // head geometry is authored around y=1.70; re-pivot it at the neck
     headMesh.geometry.translate(0, -1.70, 0);
     headMesh.position.set(0, 1.70, 0);
     g.add(headMesh);
   } else {
-    core = new THREE.Mesh(mergeColored(coreParts), coloredLambert);
+    core = new THREE.Mesh(mergeColored(coreParts), coloredStandard);
   }
   core.castShadow = true;
   // torso: chest wider than waist, flattened front-to-back. Its geometry
   // is re-pivoted at the waist so it can lean and sway as its own joint.
-  const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.185, 0.145, 0.58, 9), shirtMat);
+  const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.185, 0.145, 0.58, 12), shirtMat);
   torso.geometry.translate(0, 0.29, 0);
   torso.position.set(0, 0.95, 0);
   torso.scale.z = 0.62;
   torso.castShadow = true;
-  // arms: upper arm from the shoulder + a forearm child at the elbow, so
-  // the elbow is a real second joint that bends as the arm swings
-  function makeArm(side, mat) {
-    const upper = taperedLimb(0.062, 0.048, 0.32, mat, side * 0.27, 1.45, 0.9);
-    const foreGeo = new THREE.CylinderGeometry(0.046, 0.036, 0.30, 7);
-    foreGeo.translate(0, -0.15, 0);
-    const fore = new THREE.Mesh(foreGeo, mat);
+  // arms: capsule upper arm from the shoulder (shoulder ball baked in)
+  // + a capsule forearm child at the elbow (elbow ball + skin hand)
+  function makeArm(side) {
+    const upper = limbMesh([
+      capsuleSegment(0.055, 0.32, shirtColor),
+      { geo: new THREE.SphereGeometry(0.075, 8, 6), color: shirtColor },
+    ]);
+    upper.position.set(side * 0.27, 1.45, 0);
+    const fore = limbMesh([
+      capsuleSegment(0.045, 0.30, shirtColor),
+      { geo: new THREE.SphereGeometry(0.05, 8, 6), color: shirtColor },
+      { geo: new THREE.SphereGeometry(0.052, 8, 6), color: skin, y: -0.30 },
+    ]);
     fore.position.set(0, -0.32, 0);
     upper.add(fore);
     return { upper, fore };
   }
-  // legs: thigh from the hip + a shin child at the knee
-  function makeLeg(side, mat) {
-    const thigh = taperedLimb(0.088, 0.062, 0.46, mat, side * 0.105, 0.88, 0.9);
-    const shinGeo = new THREE.CylinderGeometry(0.058, 0.042, 0.42, 7);
-    shinGeo.translate(0, -0.21, 0);
-    const shin = new THREE.Mesh(shinGeo, mat);
+  // legs: capsule thigh from the hip (hip ball baked in) + a capsule
+  // shin child at the knee (knee ball + a dark rounded shoe)
+  function makeLeg(side) {
+    const thigh = limbMesh([
+      capsuleSegment(0.085, 0.46, pants),
+      { geo: new THREE.SphereGeometry(0.095, 8, 6), color: pants },
+    ]);
+    thigh.position.set(side * 0.105, 0.88, 0);
+    const shin = limbMesh([
+      capsuleSegment(0.06, 0.42, pants),
+      { geo: new THREE.SphereGeometry(0.065, 8, 6), color: pants },
+      { geo: new RoundedBoxGeometry(0.10, 0.07, 0.24, 2, 0.03), color: 0x1d1d20, y: -0.42, z: 0.045 },
+    ]);
     shin.position.set(0, -0.46, 0);
     thigh.add(shin);
     return { upper: thigh, fore: shin };
   }
-  const armL = makeArm(-1, shirtMat); const armR = makeArm(1, shirtMat);
-  const legMat = new THREE.MeshLambertMaterial({ color: pants });
-  const legL = makeLeg(-1, legMat); const legR = makeLeg(1, legMat);
+  const armL = makeArm(-1); const armR = makeArm(1);
+  const legL = makeLeg(-1); const legR = makeLeg(1);
   g.add(core, torso, armL.upper, armR.upper, legL.upper, legR.upper);
-  g.scale.setScalar(s);
+  g.scale.set(build.w * s, build.h * s, build.w * s);
+  g.userData.buildName = opts.build || 'average';
+  g.userData.baseScaleY = build.h * s;
   g.userData.parts = {
     armL: armL.upper, armR: armR.upper, legL: legL.upper, legR: legR.upper,
     foreL: armL.fore, foreR: armR.fore, shinL: legL.fore, shinR: legR.fore,
@@ -108,7 +143,7 @@ export function makePerson(opts = {}) {
   return g;
 }
 
-const JOINT_KEYS = ['legL', 'legR', 'shinL', 'shinR', 'armL', 'armR', 'foreL', 'foreR', 'torsoX', 'torsoZ', 'bodyX', 'headYaw'];
+const JOINT_KEYS = ['legL', 'legR', 'shinL', 'shinR', 'armL', 'armR', 'foreL', 'foreR', 'torsoX', 'torsoZ', 'torsoYaw', 'bodyX', 'headYaw'];
 
 // Procedural joint animation. Every joint angle is a SMOOTHED value:
 // targets come from the gait cycle (continuous sine swings, elbows and
@@ -123,19 +158,23 @@ export function animatePerson(rec, dt) {
   if (!parts) return;
   const down = rec.state === 'down' || rec.state === 'dead';
   const moving = rec.animSpeed > 0.15 && !down;
-  rec.animPhase += dt * (moving ? rec.animSpeed * 3.4 : 0);
+  // amplitude first: the phase rate is derived from it, so foot speed
+  // tracks ground speed (stride length ~ amp * 0.88) instead of sliding;
+  // idle still advances the phase slowly for breathing / readiness.
+  const amp = rec.state === 'dead' ? 0 : (0.30 + Math.min(0.30, rec.animSpeed * 0.045));
+  rec.animPhase += dt * (moving ? Math.max(2, Math.min(14, rec.animSpeed / (amp * 0.88))) : 1.4);
   const ph = rec.animPhase;
   const sw = moving ? Math.sin(ph) : 0;
-  const amp = rec.state === 'dead' ? 0 : (0.30 + Math.min(0.30, rec.animSpeed * 0.045));
   const T = { // targets
     legL: sw * amp, legR: -sw * amp,
     shinL: Math.max(0, -Math.sin(ph)) * amp * 0.9 + 0.04,
     shinR: Math.max(0, Math.sin(ph)) * amp * 0.9 + 0.04,
     armL: -sw * amp * 0.8, armR: sw * amp * 0.8,
-    foreL: 0.30 + Math.max(0, Math.sin(ph)) * 0.25,
-    foreR: 0.30 + Math.max(0, -Math.sin(ph)) * 0.25,
+    foreL: 0.22 + Math.max(0, -Math.sin(ph)) * 0.5,
+    foreR: 0.22 + Math.max(0, Math.sin(ph)) * 0.5,
     torsoX: moving ? Math.min(0.16, rec.animSpeed * 0.016) : 0.02,
-    torsoZ: moving ? Math.sin(ph * 0.5) * 0.035 : Math.sin(ph * 0.35) * 0.012,
+    torsoZ: moving ? Math.sin(ph) * 0.05 : Math.sin(ph * 0.35) * 0.012,
+    torsoYaw: moving ? Math.sin(ph) * 0.07 : 0,
     bodyX: down ? -Math.PI / 2 : 0,
     headYaw: 0,
   };
@@ -143,6 +182,17 @@ export function animatePerson(rec, dt) {
     T.armR = -2.0 + Math.sin(ph * 3) * 0.4;
     T.foreR = 0.25;
     T.armL = 0.3;
+  }
+  // W5 idle-social poses: a phone held up at the chest, or the small
+  // slow gestures of a person chatting with a partner
+  if (rec.armPose === 'phone' && rec.state === 'stand') {
+    T.armR = -0.55;
+    T.foreR = 1.15;
+  }
+  if (rec.state === 'social') {
+    const gph = rec.animPhase * 0.55 + (rec.gestureSeed || 0);
+    T.armR = -0.35 + Math.sin(gph) * 0.16;
+    T.foreR = 0.55 + Math.cos(gph * 0.83) * 0.14;
   }
   if (rec.crouchVisual) { T.torsoX = 0.30; T.legL = 0.5; T.legR = -0.35; T.shinL = 0.9; T.shinR = 0.7; }
   // the player's head looks toward the camera heading when one is given
@@ -154,7 +204,7 @@ export function animatePerson(rec, dt) {
     T.headYaw = Math.max(-0.7, Math.min(0.7, d));
   }
   if (!rec.joints) {
-    rec.joints = { legL: 0, legR: 0, shinL: 0, shinR: 0, armL: 0, armR: 0, foreL: 0.3, foreR: 0.3, torsoX: 0, torsoZ: 0, bodyX: 0, headYaw: 0, scaleY: rec.baseScale || 1 };
+    rec.joints = { legL: 0, legR: 0, shinL: 0, shinR: 0, armL: 0, armR: 0, foreL: 0.3, foreR: 0.3, torsoX: 0, torsoZ: 0, torsoYaw: 0, bodyX: 0, headYaw: 0, scaleY: rec.baseScale || 1 };
   }
   const J = rec.joints;
   const k = 1 - Math.exp(-dt * 14); // ~120 ms pose interpolation
@@ -164,11 +214,26 @@ export function animatePerson(rec, dt) {
   parts.legL.rotation.x = J.legL; parts.legR.rotation.x = J.legR;
   parts.shinL.rotation.x = J.shinL; parts.shinR.rotation.x = J.shinR;
   parts.armL.rotation.x = J.armL; parts.armR.rotation.x = J.armR;
+  // arms hang with a slight natural outward angle that breathes with the stride
+  parts.armL.rotation.z = 0.09 + Math.sin(ph) * 0.02;
+  parts.armR.rotation.z = -0.09 - Math.sin(ph) * 0.02;
   parts.foreL.rotation.x = -J.foreL; parts.foreR.rotation.x = -J.foreR;
   parts.torso.rotation.x = J.torsoX; parts.torso.rotation.z = J.torsoZ;
-  if (parts.headMesh) parts.headMesh.rotation.y = J.headYaw;
+  parts.torso.rotation.y = J.torsoYaw;
+  if (parts.headMesh) {
+    parts.headMesh.rotation.y = J.headYaw;
+    parts.headMesh.rotation.x = Math.sin(ph * 2) * 0.035 * Math.min(1, rec.animSpeed / 4);
+  }
   rec.group.rotation.x = J.bodyX;
   rec.group.scale.y = J.scaleY;
+  // body bob: feet leave the ground mid-stride; idle is a soft breath.
+  // Callers always set group.position.y fresh before animatePerson, so
+  // the += here lands on this frame's ground height exactly once.
+  if (!down) {
+    rec.group.position.y += moving
+      ? Math.abs(Math.sin(ph)) * 0.05 * Math.min(1, rec.animSpeed / 3)
+      : Math.sin(ph * 0.5) * 0.006;
+  }
   if (down) rec.group.position.y = 0.25;
 }
 
@@ -179,13 +244,17 @@ export function makePersonRecord(kind, group, x, z) {
     kind, group,
     x, z, heading: Math.random() * Math.PI * 2,
     speed: 0, animSpeed: 0, animPhase: Math.random() * 6,
-    state: 'wander',           // wander | flee | hostile | attack | down | stand
+    state: 'wander',           // wander | flee | hostile | attack | down | stand | social
     tx: x, tz: z,               // current wander target
     retargetT: Math.random() * 4,
     downT: 0, hostileT: 0,
-    baseScale: group.scale.x,
+    build: group.userData.buildName || 'average',
+    baseScale: group.userData.baseScaleY ?? group.scale.x,
     crouchVisual: false,
     armed: false,
+    armPose: null,              // W5: 'phone' while standing with a phone
+    gestureSeed: Math.random() * 6.28,
+    socialT: 0, socialPartner: null,
   };
   if (kind !== 'child') rec.health = kind === 'thug' ? 36 : 30;
   return rec;
@@ -207,7 +276,7 @@ export function makeAnimal(x, z) {
   for (const [lx, lz] of [[0.24, 0.11], [0.24, -0.11], [-0.24, 0.11], [-0.24, -0.11]]) {
     parts.push({ geo: new THREE.BoxGeometry(0.09, 0.34, 0.09), color: fur, x: lx, y: 0.17, z: lz });
   }
-  const body = new THREE.Mesh(mergeColored(parts), coloredLambert);
+  const body = new THREE.Mesh(mergeColored(parts), coloredStandard);
   body.castShadow = true;
   g.add(body);
   g.position.set(x, 0, z);

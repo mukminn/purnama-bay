@@ -4,9 +4,10 @@
 import * as THREE from 'three';
 import { S, CFG, dist2d, pushOut, pushOutCars, clamp } from './config.js';
 import { sfx } from './audio.js';
-import { mergeColored, coloredLambert } from './merge.js';
+import { mergeColored, coloredStandard } from './merge.js';
+import { WX, lightState, TL_AXES } from './world.js';
 
-const coloredBasic = new THREE.MeshBasicMaterial({ vertexColors: true });
+const coloredStd = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.5, metalness: 0.3 });
 
 export const MODELS = {
   'Pijar City': { len: 3.6, wid: 1.7, hgt: 0.62, cabin: 0.5, maxSpeed: 17, accel: 11, color: 0xd96f32 },
@@ -73,14 +74,13 @@ function buildCarMesh(model, colorOverride) {
     paintParts.push({ geo: new THREE.BoxGeometry(0.16, 0.04, 0.05), color: paintColor, x: sx * (Wd / 2 + 0.07), y: 1.12, z: L * 0.16 });
   }
   const paintMesh = new THREE.Mesh(mergeColored(paintParts),
-    new THREE.MeshPhongMaterial({ vertexColors: true, shininess: 70, specular: 0x8fa8bf }));
+    new THREE.MeshPhysicalMaterial({ vertexColors: true, roughness: 0.32, metalness: 0.15, clearcoat: 1, clearcoatRoughness: 0.06, envMapIntensity: 1.1 }));
   paintMesh.castShadow = true;
   paintMesh.name = 'car-paint';
   g.add(paintMesh);
   // GLASS assembly (its own glossy material, separate from paint):
   // windscreen, rear screen and both side windows as distinct panes
   // sitting between the pillars.
-  const glassMat = new THREE.MeshPhongMaterial({ color: 0x1b3049, shininess: 160, specular: 0xd8f0ff });
   const glassParts = [];
   const GLASS = 0x2a4a6a;
   const wsZ = pickup ? L * 0.155 : L * 0.185; const wsRx = pickup ? -0.62 : -0.72;
@@ -90,8 +90,7 @@ function buildCarMesh(model, colorOverride) {
     glassParts.push({ geo: new THREE.PlaneGeometry(roofLen * 0.92, 0.4), color: GLASS, x: sx * (Wd * 0.415), y: 1.15, z: roofZ, ry: sx * Math.PI / 2 }); // side windows
   }
   const glassMesh = new THREE.Mesh(mergeColored(glassParts),
-    new THREE.MeshPhongMaterial({ vertexColors: true, shininess: 160, specular: 0xd8f0ff }));
-  void glassMat;
+    new THREE.MeshPhysicalMaterial({ color: 0x10161f, roughness: 0.05, metalness: 0.9, envMapIntensity: 1.4 }));
   glassMesh.name = 'car-glass';
   g.add(glassMesh);
   // DARK TRIM assembly: front/rear bumpers, wheel-arch discs, mirror
@@ -112,7 +111,7 @@ function buildCarMesh(model, colorOverride) {
   for (const [wx, wz] of [[-Wd / 2, L * 0.32], [Wd / 2, L * 0.32], [-Wd / 2, -L * 0.32], [Wd / 2, -L * 0.32]]) {
     darkParts.push({ geo: new THREE.CircleGeometry(0.47, 14, 0, Math.PI), color: DARK, x: wx + (wx < 0 ? -0.045 : 0.045), y: 0.35, z: wz, ry: wx < 0 ? -Math.PI / 2 : Math.PI / 2 });
   }
-  const trimMesh = new THREE.Mesh(mergeColored(darkParts), coloredLambert);
+  const trimMesh = new THREE.Mesh(mergeColored(darkParts), coloredStandard);
   trimMesh.name = 'car-trim';
   g.add(trimMesh);
   // TYRES: near-black rubber, its own material - visibly distinct from
@@ -122,11 +121,10 @@ function buildCarMesh(model, colorOverride) {
     tyreParts.push({ geo: new THREE.CylinderGeometry(0.35, 0.35, 0.24, 14), color: 0x0c0d0f, x: wx, y: 0.35, z: wz, rz: Math.PI / 2 });
     hubParts.push({ geo: new THREE.CylinderGeometry(0.17, 0.17, 0.26, 10), color: 0xb9c2c9, x: wx, y: 0.35, z: wz, rz: Math.PI / 2 });
   }
-  const tyreMesh = new THREE.Mesh(mergeColored(tyreParts), coloredLambert);
+  const tyreMesh = new THREE.Mesh(mergeColored(tyreParts), coloredStandard);
   tyreMesh.name = 'car-tyres';
   g.add(tyreMesh);
-  const hubMesh = new THREE.Mesh(mergeColored(hubParts),
-    new THREE.MeshPhongMaterial({ vertexColors: true, shininess: 110, specular: 0xffffff }));
+  const hubMesh = new THREE.Mesh(mergeColored(hubParts), coloredStandard);
   hubMesh.name = 'car-hubs';
   g.add(hubMesh);
   // LAMPS: pale headlights at the nose, red tail lights at the tail.
@@ -135,12 +133,12 @@ function buildCarMesh(model, colorOverride) {
     lampParts.push({ geo: new THREE.BoxGeometry(0.34, 0.11, 0.06), color: 0xffe9b0, x: sx * Wd * 0.32, y: 0.62, z: L / 2 + 0.055 });
     lampParts.push({ geo: new THREE.BoxGeometry(0.36, 0.10, 0.06), color: 0xd92b3a, x: sx * Wd * 0.32, y: 0.66, z: -L / 2 - 0.055 });
   }
-  const lampMesh = new THREE.Mesh(mergeColored(lampParts), coloredBasic);
+  const lampMesh = new THREE.Mesh(mergeColored(lampParts), coloredStd);
   lampMesh.name = 'car-lamps';
   g.add(lampMesh);
   if (model === 'Patrol Unit') {
     const bar = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.13, 0.38),
-      new THREE.MeshBasicMaterial({ color: 0xff4444 }));
+      new THREE.MeshStandardMaterial({ color: 0xff4444, emissive: 0xff2222, emissiveIntensity: 0.9, roughness: 0.4 }));
     bar.position.set(0, 1.47, -L * 0.03);
     g.add(bar);
     g.userData.lightBar = bar;
@@ -372,15 +370,35 @@ export function damageCar(car, dmg) {
 }
 
 export function updateTraffic(dt) {
+  const ls = lightState();
   for (const c of S.cars) {
     if (!c.traffic || c.dead) continue;
     // slow for the player's car ahead, otherwise cruise the avenue
-    let speed = c.cruise;
+    // (rain trims every traffic car's pace by up to 35%)
+    let speed = c.cruise * (1 - 0.35 * WX.rain);
     if (S.currentCar) {
       const ahead = c.axis === 'x'
         ? (S.currentCar.z - c.z) * 0 + (Math.abs(S.currentCar.z - c.line) < 4 ? (S.currentCar.x - c.x) * c.dir : -1)
         : (Math.abs(S.currentCar.x - c.line) < 4 ? (S.currentCar.z - c.z) * c.dir : -1);
       if (ahead > 0 && ahead < 9) speed = Math.min(speed, Math.max(0, Math.abs(S.currentCar.speed)));
+    }
+    // queue behind another traffic car on the same avenue and lane:
+    // match its pace, and never close the last few metres into it
+    for (const o of S.cars) {
+      if (o === c || !o.traffic || o.dead || o.axis !== c.axis) continue;
+      if (Math.abs(o.line - c.line) > 2) continue;
+      const gap = ((c.axis === 'x' ? o.x - c.x : o.z - c.z) * c.dir) - (c.len + o.len) / 2;
+      if (gap > -1 && gap < 7) speed = Math.min(speed, gap < 3 ? 0 : Math.abs(o.speed));
+    }
+    // W3: stop at the line (8.6 m before the centre) when this car's
+    // axis is red or yellow at a main intersection ahead
+    const axisState = c.axis === 'x' ? ls.xState : ls.zState;
+    if (axisState !== 'green' && TL_AXES.some((a) => Math.abs(c.line - a) < 6.5)) {
+      const pos = c.axis === 'x' ? c.x : c.z;
+      for (const ic of TL_AXES) {
+        const d = (ic - c.dir * 8.6 - pos) * c.dir; // metres to the stop line
+        if (d > -0.5 && d < 16) speed = Math.min(speed, Math.max(0, (d - 1.2) * 0.9));
+      }
     }
     c.speed = speed * c.dir;
     if (c.axis === 'x') {

@@ -3,8 +3,8 @@
 // and the bay's dogs and cats. Counts are the game's census targets.
 import * as THREE from 'three';
 import { S, CFG, dist2d, pushOut, pushOutCars, clamp } from './config.js';
-import { makePerson, makePersonRecord, makeAnimal, animatePerson, animateAnimal } from './characters.js';
-import { PLACES, ROAD_LINES, SIDEWALK_OFFSET, isRoad, isSidewalk, inPark, PARK, groundYAt } from './world.js';
+import { makePerson, makePersonRecord, makeAnimal, animatePerson, animateAnimal, attachProp } from './characters.js';
+import { PLACES, ROAD_LINES, SIDEWALK_OFFSET, isRoad, isSidewalk, inPark, PARK, groundYAt, WX } from './world.js';
 import { reportCrime } from './wanted.js';
 import { sfx } from './audio.js';
 
@@ -128,37 +128,39 @@ function addPerson(scene, kind, x, z, opts) {
 export function buildPopulation(scene) {
   const hideCorner = { x: 130, z: -95 }; // kept empty: the quiet corner
   void hideCorner;
-  // citizens and children start ON the pavement network / in the park
+  // citizens and children start ON the pavement network / in the park;
+  // citizens cycle through the four body builds by index
+  const BUILD_CYCLE = ['slim', 'average', 'tall', 'broad'];
   for (let i = 0; i < CENSUS.citizen; i++) {
     const [x, z] = i % 4 === 3 ? randomParkPoint() : randomSidewalkPoint();
-    addPerson(scene, 'citizen', x, z, {});
+    addPerson(scene, 'citizen', x, z, { build: BUILD_CYCLE[i % 4] });
   }
   const shopSpots = [
     [CFG.shopDoor.x - 3, CFG.shopDoor.z - 2], [PLACES.cafe.x + 3, PLACES.cafe.z - 2],
     [PLACES.garage.x + 4, PLACES.garage.z - 2], [-72, -24],
     [-10, 72],
   ];
-  for (const [x, z] of shopSpots) {
-    const rec = addPerson(scene, 'shopkeeper', x, z, { cap: 0x31435c });
+  shopSpots.forEach(([x, z], i) => {
+    const rec = addPerson(scene, 'shopkeeper', x, z, { cap: 0x31435c, build: i % 2 ? 'broad' : 'average' });
     rec.state = 'stand'; rec.homeX = x; rec.homeZ = z;
-  }
+  });
   // dockworkers pace the pier apron, clear of every carriageway band
   const dockXs = [-30, -23, -16, -9, 9, 16];
   for (let i = 0; i < CENSUS.dockworker; i++) {
     const x = dockXs[i % dockXs.length];
     const z = 96 + (i % 3) * 5;
-    const rec = addPerson(scene, 'dockworker', x, z, { shirt: 0xd96f32, cap: 0xf5e9b8 });
+    const rec = addPerson(scene, 'dockworker', x, z, { shirt: 0xd96f32, cap: 0xf5e9b8, build: i % 2 ? 'average' : 'broad' });
     rec.homeX = x; rec.homeZ = z;
   }
   for (let i = 0; i < CENSUS.child; i++) {
     const [x, z] = i % 2 === 0 ? randomParkPoint() : randomSidewalkPoint();
-    addPerson(scene, 'child', x, z, { scale: 0.62, skirt: i % 2 === 0 });
+    addPerson(scene, 'child', x, z, { scale: i % 2 ? 0.66 : 0.58, skirt: i % 2 === 0 });
   }
   // syndicate thugs loiter ON pavements near the warehouse and the
   // docks; two are armed
   const thugSpots = [[87.35, -52], [87.35, -74], [-24, 87.35], [72.65, -52], [-30, 100]];
   thugSpots.forEach(([x, z], i) => {
-    const rec = addPerson(scene, 'thug', x, z, { shirt: 0x23272c, pants: 0x17191c, cap: 0x101214 });
+    const rec = addPerson(scene, 'thug', x, z, { shirt: 0x23272c, pants: 0x17191c, cap: 0x101214, build: i % 2 ? 'tall' : 'broad' });
     rec.armed = i % 2 === 0;
     rec.homeX = x; rec.homeZ = z;
   });
@@ -169,9 +171,56 @@ export function buildPopulation(scene) {
     S.npcs.push(rec);
   }
   // Mira Santoso, the mission contact, waits by the spawn plaza
-  const mira = addPerson(scene, 'contact', CFG.miraSpot.x, CFG.miraSpot.z, { shirt: 0x0f7d8c, skirt: true });
+  const mira = addPerson(scene, 'contact', CFG.miraSpot.x, CFG.miraSpot.z, { shirt: 0x0f7d8c, skirt: true, build: 'average' });
   mira.state = 'stand'; mira.homeX = CFG.miraSpot.x; mira.homeZ = CFG.miraSpot.z; mira.isMira = true;
+  designateSocial(scene);
   return mira;
+}
+
+// W5 - idle social life, designated once from ordinary citizens:
+// three phone users stand on pavements near the shops with a little
+// emissive-screened phone in the right hand (armPose 'phone' drives
+// the pose in animatePerson), and two pairs of citizens stand facing
+// each other in 'social' state, chatting with small gestures for
+// 10-22 s before wandering off again.
+function designateSocial(scene) {
+  void scene;
+  const citizens = S.npcs.filter((n) => n.kind === 'citizen');
+  const phoneSpots = [[27.35, 24], [32.65, 36], [-7.35, 64]];
+  citizens.slice(0, 3).forEach((rec, i) => {
+    const [x, z] = phoneSpots[i];
+    rec.x = x; rec.z = z; rec.homeX = x; rec.homeZ = z;
+    rec.state = 'stand';
+    rec.armPose = 'phone';
+    rec.group.position.set(x, 0, z);
+    const phone = new THREE.Group();
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.15, 0.10),
+      new THREE.MeshStandardMaterial({ color: 0x14161a, roughness: 0.4, metalness: 0.4 }));
+    const screen = new THREE.Mesh(new THREE.PlaneGeometry(0.075, 0.125),
+      new THREE.MeshStandardMaterial({ color: 0x0a141c, emissive: 0x9fd4ff, emissiveIntensity: 1.1, roughness: 0.3 }));
+    screen.position.set(0, 0, 0.026);
+    phone.add(body, screen);
+    attachProp(rec, phone);
+  });
+  const pairSpots = [
+    [[PARK.x - 3, PARK.z - 3], [PARK.x - 1.8, PARK.z - 3]],
+    [[47.35, -20], [47.35, -18.8]],
+  ];
+  const pairRecs = citizens.slice(3, 7);
+  pairSpots.forEach(([a, b], pi) => {
+    const r1 = pairRecs[pi * 2]; const r2 = pairRecs[pi * 2 + 1];
+    if (!r1 || !r2) return;
+    r1.x = a[0]; r1.z = a[1]; r2.x = b[0]; r2.z = b[1];
+    r1.heading = Math.atan2(b[0] - a[0], b[1] - a[1]);
+    r2.heading = Math.atan2(a[0] - b[0], a[1] - b[1]);
+    for (const r of [r1, r2]) {
+      r.state = 'social';
+      r.socialT = 10 + Math.random() * 12;
+      r.animSpeed = 0;
+      r.group.position.set(r.x, 0, r.z);
+    }
+    r1.socialPartner = r2; r2.socialPartner = r1;
+  });
 }
 
 // Kill an adult outright (a car impact at speed). The state is 'dead'
@@ -280,11 +329,31 @@ export function updatePopulation(dt) {
     }
     if (n.kind !== 'animal') checkCarHits(n);
     if (n.state === 'dead') { syncMesh(n); continue; }
+    if (n.armPose && n.state !== 'stand') n.armPose = null; // W5: pose drops when life interrupts
     if (n.state === 'stand') {
       n.animSpeed = 0;
       // shopkeepers and Mira idle at home, turning slowly to watch the street
       n.heading += Math.sin(S.time * 0.4 + n.animPhase) * 0.1 * dt;
-      syncMesh(n); continue;
+      syncMesh(n);
+      animatePerson(n, dt); // idle breathing + the W5 phone pose
+      continue;
+    }
+    if (n.state === 'social') {
+      // W5: chat with the partner, face to face, then wander off
+      n.animSpeed = 0;
+      n.socialT -= dt;
+      const partner = n.socialPartner;
+      if (partner && partner.state === 'social') {
+        n.heading = Math.atan2(partner.x - n.x, partner.z - n.z);
+      }
+      if (n.socialT <= 0 || !partner || partner.state !== 'social') {
+        n.state = 'wander';
+        n.socialPartner = null;
+        n.retargetT = 0.5;
+      }
+      syncMesh(n);
+      animatePerson(n, dt);
+      continue;
     }
     if (n.state === 'flee') {
       n.fleeT -= dt;
@@ -344,7 +413,8 @@ export function updatePopulation(dt) {
         }
         const wp = n.waypoints[0];
         if (wp) {
-          const arrived = steer(n, wp[0], wp[1], n.kind === 'child' ? 2.4 : 1.35, dt);
+          // rain makes every pedestrian hurry (up to +60%)
+          const arrived = steer(n, wp[0], wp[1], (n.kind === 'child' ? 2.4 : 1.35) * (1 + 0.6 * WX.rain), dt);
           if (arrived) n.waypoints.shift();
         } else {
           n.animSpeed = 0;
@@ -395,6 +465,8 @@ export function countsSnapshot() {
       state: n.state,
     })),
     deadCount: S.npcs.filter((n) => n.state === 'dead').length,
+    socialPhone: S.npcs.filter((n) => n.armPose === 'phone').length,
+    socialChat: S.npcs.filter((n) => n.state === 'social').length,
   };
 }
 

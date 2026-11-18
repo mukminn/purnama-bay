@@ -13,11 +13,20 @@
   .panel { background: rgba(13, 22, 32, 0.78); border: 1px solid rgba(255, 211, 77, 0.35); border-radius: 10px; backdrop-filter: blur(3px); }
   /* ---------- HUD ---------- */
   #hud { position: fixed; inset: 0; pointer-events: none; display: none; }
-  #objective { position: fixed; top: 12px; left: 12px; max-width: 330px; padding: 7px 11px; font-size: 13.5px; line-height: 1.2; color: #ffe9a8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  #minimap-wrap { position: fixed; top: 12px; right: 12px; width: 148px; height: 148px; border-radius: 50%; overflow: hidden; border: 2px solid rgba(255,255,255,0.35); background: #8a8f66; }
+  #toast { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); max-width: min(680px, 92vw); padding: 9px 18px; font-size: 15px; font-weight: 600; color: #ffe9a8; text-align: center; opacity: 0; transition: opacity 0.35s; pointer-events: none; z-index: 25; }
+  #minimap-wrap { position: fixed; top: 12px; right: 12px; width: 148px; height: 148px; border-radius: 50%; overflow: hidden; border: 2px solid rgba(255,255,255,0.35); background: #8a8f66; pointer-events: auto; cursor: pointer; }
   #minimap { width: 148px; height: 148px; display: block; }
   /* compact stat stack: stars, money, health, weapon - no text panels */
-  #stats { position: fixed; top: 52px; left: 12px; width: 168px; padding: 7px 11px; }
+  #stats { position: fixed; top: 12px; left: 12px; width: 168px; padding: 7px 11px; }
+  /* ---------- full city map overlay ---------- */
+  #map-overlay { position: fixed; inset: 0; background: rgba(6,12,20,0.93); display: none; z-index: 60; flex-direction: column; align-items: center; padding: 14px; }
+  #map-overlay .map-bar { display: flex; align-items: center; gap: 18px; margin-bottom: 10px; }
+  #map-overlay .map-title { font-size: 19px; font-weight: 800; letter-spacing: 2px; color: #ffd34d; }
+  #map-close { pointer-events: auto; padding: 8px 18px; background: #31435c; color: #fff; border: 1px solid rgba(255,211,77,0.5); border-radius: 8px; font-weight: 700; cursor: pointer; }
+  #bigmap { max-width: 94vw; max-height: 80vh; border: 2px solid rgba(255,255,255,0.35); border-radius: 10px; background: #14607e; }
+  #map-overlay .map-legend { margin-top: 10px; font-size: 13px; color: #bcd8e8; text-align: center; }
+  #btn-map { right: 20px; top: 172px; }
+  #btn-cam { left: 18px; top: 118px; }
   #hud-money { font-size: 17px; font-weight: 700; color: #ffd34d; }
   #hud-health-track { height: 8px; background: rgba(255,255,255,0.18); border-radius: 5px; margin: 5px 0; overflow: hidden; }
   #hud-health-fill { height: 100%; width: 100%; background: #57c256; transition: width 0.2s; }
@@ -71,14 +80,14 @@
   #btn-hit { right: 82px; bottom: 82px; }
 </style>
 <script type="importmap">
-{ "imports": { "three": "./vendor/three.module.min.js" } }
+{ "imports": { "three": "./vendor/three.module.min.js", "three/addons/": "./vendor/addons/" } }
 </script>
 </head>
 <body>
 <div id="scene"></div>
 
 <div id="hud">
-  <div id="objective" class="panel"></div>
+  <div id="toast" class="panel"></div>
   <div id="minimap-wrap"><canvas id="minimap" width="148" height="148"></canvas></div>
   <div id="stats" class="panel">
     <div id="hud-stars"></div>
@@ -110,6 +119,15 @@
   <button id="shop-close">Leave shop</button>
 </div>
 
+<div id="map-overlay">
+  <div class="map-bar">
+    <div class="map-title">PURNAMA BAY — CITY MAP</div>
+    <button id="map-close">✕ CLOSE</button>
+  </div>
+  <canvas id="bigmap" width="1000" height="800"></canvas>
+  <div class="map-legend">YOU ▲ white · gold = objective · red = police · blue = Purnama Arms</div>
+</div>
+
 <div id="dmg-vignette"></div>
 <div id="dmg-dir"><div id="dmg-dir-arc"></div></div>
 <div id="hitmarker">&#10005;</div>
@@ -120,6 +138,8 @@
   <div id="btn-brake" class="tbtn">BRAKE</div>
   <div id="btn-jump" class="tbtn">JUMP</div>
   <div id="btn-hit" class="tbtn">HIT</div>
+  <div id="btn-map" class="tbtn">MAP</div>
+  <div id="btn-cam" class="tbtn">CAM</div>
 </div>
 
 <div id="menu" class="full-overlay">
@@ -130,7 +150,8 @@
     <button id="btn-continue" class="big-btn alt" style="display:none">CONTINUE</button>
   </div>
   <div class="controls">
-    WASD move · Alt walk · Shift sprint · Space jump / brake · C crouch · J punch · K kick · 1 baton · 2 pistol · 3 fists · F enter / exit car · E interact · P pause · M mute · Drag the right half of the screen (or the mouse) to orbit the camera<br>
+    WASD move · Alt walk · Shift sprint · Space jump / brake · C crouch · J punch · K kick · 1 baton · 2 pistol · 3 fists · F enter / exit car · E interact · P pause · M map · N mute · V first-person camera · Drag the right half of the screen (or the mouse) to orbit the camera<br>
+    Click the minimap or tap MAP to open the full city map.<br>
     Wanted stars rise only when a crime is witnessed. Money comes only from Mira's jobs.<br>
     Six jobs, one bay: First Run · Dock Hands · Borrowed Wheels · Quiet Warehouse · Tail Breaker · Last Ferry Out.
   </div>
