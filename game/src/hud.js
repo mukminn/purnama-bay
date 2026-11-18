@@ -3,12 +3,14 @@
 // PURNAMA ARMS shop panel. Pure DOM + one 2D canvas; no framework.
 import { S, CFG } from './config.js';
 import { drawPortrait } from './textures.js';
-import { W } from './wanted.js';
+import { W, decayProgress } from './wanted.js';
+import { sfx } from './audio.js';
 import { PLACES, PARK, ROAD_LINES } from './world.js';
 
 const el = {};
 let minimapTarget = null;
 let lastMoney = -1; let lastHealth = -1; let lastStars = -1; let lastWeapon = '';
+let lastSeenKey = ''; let lastStarBanner = ''; let lastDecayW = '';
 // genre-style combat feedback state (DOM overlays declared in index.html)
 let dmgAt = -1e9; let dmgBearing = 0; let hitAt = -1e9;
 
@@ -28,6 +30,61 @@ export function showHitMarker() {
   S.feedback.hits++;
 }
 
+// ------------------------------------------------------------------
+// Round 11 (P2-1): floating texts - damage numbers over a hurt enemy
+// and gold "+PB$" over the player when a job pays. World-anchored DOM
+// nodes from a fixed pool; main.js supplies the world->screen projector
+// (it owns the camera) and calls updateFloaters() every frame.
+const floaters = [];
+let floaterProjector = null;
+export function setFloaterProjector(fn) { floaterProjector = fn; }
+export function floatText(x, z, text, color) {
+  const f = floaters.find((k) => !k.active) || floaters[0];
+  if (!f) return;
+  f.active = true;
+  f.x = x; f.z = z;
+  f.born = performance.now();
+  f.el.textContent = text;
+  f.el.style.color = color || '#ffffff';
+  f.el.style.display = 'block';
+}
+export function updateFloaters() {
+  const now = performance.now();
+  for (const f of floaters) {
+    if (!f.active) continue;
+    const age = now - f.born;
+    if (age > f.life || !floaterProjector) {
+      f.active = false;
+      f.el.style.display = 'none';
+      continue;
+    }
+    const rise = age / f.life; // climbs ~46 px over its life
+    const pr = floaterProjector(f.x, 2.1, f.z);
+    if (!pr || !pr.visible) { f.el.style.display = 'none'; continue; }
+    f.el.style.display = 'block';
+    f.el.style.left = `${pr.sx}px`;
+    f.el.style.top = `${pr.sy - rise * 46}px`;
+    f.el.style.opacity = String(Math.max(0, 1 - rise * rise));
+  }
+}
+
+// Round 11 (P2-5): the objective's distance in metres, a small line
+// under the objective toast; during job 5's chase stage main appends
+// the tail progress to the same line (P1-14).
+let objDistText = '';
+export function updateObjectiveDist(text) {
+  const t = text || '';
+  if (t === objDistText) return; // called per frame: write DOM only on change
+  objDistText = t;
+  if (!el['obj-dist']) return;
+  if (objDistText) {
+    el['obj-dist'].textContent = objDistText;
+    el['obj-dist'].style.display = 'block';
+  } else {
+    el['obj-dist'].style.display = 'none';
+  }
+}
+
 export function setMinimapTarget(t) { minimapTarget = t; }
 
 // The last drawn player-arrow angle (canvas radians) and the heading of
@@ -42,6 +99,15 @@ export function hudInfo() {
     velAngle: Math.round(arrowState.vel * 1000) / 1000,
     diffDeg: Math.round(Math.abs(d) * 180 / Math.PI * 10) / 10,
     speedKmh: S.inCar && S.currentCar ? Math.round(Math.abs(S.currentCar.speed) * 3.6) : 0,
+    // round 11: the seen/unseen indicator state, the decay ring value,
+    // the last wanted banner and the live floater count - all readable
+    // by probes because none of it is audible/visible to a headless run
+    seen: W.seenByPolice,
+    decay: Math.round(decayProgress() * 100) / 100,
+    seenText: el['hud-seen'] ? el['hud-seen'].textContent : '',
+    wantedBanner: lastStarBanner,
+    floaters: floaters.filter((f) => f.active).length,
+    objDist: objDistText,
   };
 }
 
@@ -50,8 +116,21 @@ export function initHUD(hooks) {
     'hud-money', 'hud-health-fill', 'hud-stars', 'hud-weapon', 'speedo',
     'dialog', 'dialog-name', 'dialog-text', 'dialog-portrait', 'dialog-next',
     'shop', 'shop-msg', 'shop-money', 'banner',
+    'hud-seen', 'hud-decay-fill', 'obj-dist',
     'dmg-vignette', 'dmg-dir', 'hitmarker', 'bigmap', 'map-overlay']) {
     el[id] = document.getElementById(id);
+  }
+  // round 11 (P2-1): the floating-text pool - a fixed set of DOM nodes
+  // recycled for damage numbers and PB$ gains, never allocated per event
+  const hudRoot = document.getElementById('hud');
+  if (hudRoot && !floaters.length) {
+    for (let i = 0; i < 12; i++) {
+      const d = document.createElement('div');
+      d.className = 'floater';
+      d.style.display = 'none';
+      hudRoot.appendChild(d);
+      floaters.push({ el: d, active: false, x: 0, z: 0, born: 0, life: 1100 });
+    }
   }
   el['dialog-next'].addEventListener('click', () => { hideDialog(); if (hooks && hooks.onDialog) hooks.onDialog(); });
   document.querySelectorAll('[data-buy]').forEach((b) => {
@@ -160,8 +239,44 @@ export function updateHUD(weaponSnap) {
     el['hud-health-fill'].style.background = hp > 35 ? '#57c256' : '#d94f3d';
   }
   if (W.stars !== lastStars) {
+    const prevStars = lastStars;
     lastStars = W.stars;
     el['hud-stars'].textContent = W.stars > 0 ? '★'.repeat(W.stars) + '☆'.repeat(5 - W.stars) : '';
+    // round 11 (P2-2): a star change gets a banner + a hard sting, up
+    // or down - not just a quiet glyph change in the corner
+    if (prevStars >= 0 && S.mode === 'playing') {
+      if (W.stars > prevStars) {
+        lastStarBanner = `WANTED ${'★'.repeat(W.stars)}`;
+        showBanner(lastStarBanner);
+        sfx.wantedUp();
+      } else if (W.stars < prevStars) {
+        lastStarBanner = W.stars === 0 ? 'HEAT LOST - YOU ARE CLEAR' : `HEAT FADING ${'★'.repeat(W.stars)}`;
+        showBanner(lastStarBanner);
+        sfx.wantedDown();
+      }
+    }
+  }
+  // round 11 (P1-6): the seen/unseen eye beside the stars, plus the
+  // decay ring (a slim bar) that fills while the player stays unseen -
+  // it reads seenByPolice and decayProgress() straight from wanted.js
+  if (el['hud-seen']) {
+    const seenNow = W.stars > 0 && W.seenByPolice;
+    const hiddenNow = W.stars > 0 && !W.seenByPolice;
+    const seenKey = W.stars === 0 ? 'off' : (seenNow ? 'seen' : 'hidden');
+    if (seenKey !== lastSeenKey) {
+      lastSeenKey = seenKey;
+      if (seenKey === 'off') {
+        el['hud-seen'].style.display = 'none';
+      } else {
+        el['hud-seen'].style.display = 'block';
+        el['hud-seen'].textContent = seenNow ? '👁 SEEN' : '👁‍🗨 HIDDEN';
+        el['hud-seen'].style.color = seenNow ? '#ff6b57' : '#7ec8e3';
+      }
+    }
+    if (el['hud-decay-fill']) {
+      const w = hiddenNow ? `${Math.round(decayProgress() * 100)}%` : '0%';
+      if (w !== lastDecayW) { lastDecayW = w; el['hud-decay-fill'].style.width = w; }
+    }
   }
   const wtxt = weaponSnap.active === 'pistol' ? `PISTOL · ${weaponSnap.ammo}`
     : weaponSnap.active === 'baton' ? 'BASEBALL BAT'

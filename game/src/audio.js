@@ -89,6 +89,12 @@ export const sfx = {
   missionDone() { [523, 659, 784].forEach((f, i) => setTimeout(() => tone(f, 0.16, 'sine', 0.14), i * 110)); },
   busted() { tone(392, 0.2, 'triangle', 0.16); setTimeout(() => tone(262, 0.34, 'triangle', 0.16), 180); },
   hurt() { tone(200, 0.09, 'sawtooth', 0.12, 140); },
+  // round 11: a hard two-note sting when a star is gained, a falling
+  // release when one is shed, and a short whoosh telegraphing an NPC's
+  // melee wind-up so the player hears the swing coming
+  wantedUp() { tone(196, 0.12, 'square', 0.16); setTimeout(() => tone(294, 0.2, 'square', 0.16), 90); },
+  wantedDown() { tone(294, 0.12, 'triangle', 0.14); setTimeout(() => tone(196, 0.22, 'triangle', 0.14), 90); },
+  windup() { noiseBurst(0.13, 0.10, 1500); },
   splash() { noiseBurst(0.22, 0.16, 620); },
   crate() { tone(150, 0.07, 'triangle', 0.16, 90); noiseBurst(0.05, 0.12, 800); },
 };

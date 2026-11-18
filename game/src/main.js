@@ -11,10 +11,10 @@ import { buildVehicles, nearestEnterableCar, driveStep, updateTraffic, enterCar,
 import { W, wantedSnapshot, updateWanted, noteVehicleSwap, noteClothesChange, clearWanted, reportCrime } from './wanted.js';
 import { updatePolice, policeDebug, nearestPoliceDist } from './police.js';
 import { WPN, weaponsSnapshot, selectWeapon, buyItem, meleeAttack, punchNearest, shoot, initDrops, updateDrops, dropsInfo, pickupDropAt, flushBufferedAttack } from './weapons.js';
-import { MISSIONS, M, startMission, updateMissions, missionSnapshot, missionsInit, setStealCar, stageFinaleCrime } from './missions.js';
-import { initHUD, setObjective, showBanner, showDialog, hideDialog, setPrompt, openShop, closeShop, refreshShop, updateHUD, setMinimapTarget, showDamage, hudInfo, toastInfo, openMap, closeMap, isMapOpen, mapInfo } from './hud.js';
-import { initTouch, refreshTouchVisibility, isTouchCapable } from './touch.js';
-import { audioInit, sfx, sirenUpdate, audioToggleMute, audioInfo } from './audio.js';
+import { MISSIONS, M, startMission, updateMissions, missionSnapshot, missionsInit, setStealCar } from './missions.js';
+import { initHUD, setObjective, showBanner, showDialog, hideDialog, setPrompt, openShop, closeShop, refreshShop, updateHUD, setMinimapTarget, showDamage, hudInfo, toastInfo, openMap, closeMap, isMapOpen, mapInfo, setFloaterProjector, updateFloaters, updateObjectiveDist } from './hud.js';
+import { initTouch, refreshTouchVisibility, deviceMode, cycleDeviceMode, modeOverrideValue } from './touch.js';
+import { audioInit, sfx, sirenUpdate, audioToggleMute, audioIsMuted, audioInfo } from './audio.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.min.js';
 
 const SAVE_KEY = 'purnama-bay-save-v1';
@@ -114,20 +114,28 @@ missionsInit(scene, {
   onObjective: (t) => setObjective(t),
   onDialog: (who, name, text) => showDialog(who, name, text),
   onGameClear: () => endGame('clear'),
+  onSave: () => saveGame(), // P0-1: finishing a job writes the save
 });
 initHUD({
-  onBuy: (item) => { const msg = buyItem(item); refreshShop(msg); },
+  // P0-1: a purchase that actually moved money writes the save too
+  onBuy: (item) => {
+    const before = S.money;
+    const msg = buyItem(item);
+    if (S.money !== before) saveGame();
+    refreshShop(msg);
+  },
   onDialog: () => {},
   onMap: () => toggleMapGame(),
 });
 
-// device mode: touch hardware plays the HP layout, everything else PC.
-// The module runs after the body is parsed, so the menu elements exist.
-const DEVICE_MODE = isTouchCapable() ? 'HP' : 'PC';
+// device mode (round 11, P2-4): touch.js owns the live mode - a manual
+// pause-panel override wins, a first touch re-detects, hardware is the
+// default. The module runs after the body is parsed, so the menu
+// elements exist.
 {
   const tag = document.getElementById('mode-tag');
-  if (tag) tag.textContent = DEVICE_MODE === 'PC' ? 'MODE: PC — keyboard & mouse' : 'MODE: HP — touch controls';
-  if (DEVICE_MODE === 'HP') {
+  if (tag) tag.textContent = deviceMode() === 'PC' ? 'MODE: PC — keyboard & mouse' : 'MODE: HP — touch controls';
+  if (deviceMode() === 'HP') {
     const controls = document.getElementById('menu-controls');
     if (controls) controls.textContent = 'Left stick move · drag right side for camera · HIT fight · ACT interact / enter car · JUMP · MAP full map · CAM first-person';
   }
@@ -166,6 +174,15 @@ function saveGame() {
   } catch { /* storage unavailable: saving is best-effort */ }
 }
 
+// P0-1: once a run is under way, hiding the tab or closing the page
+// writes the save as well - guarded by runActive so that merely opening
+// the menu and leaving can never overwrite a real save with menu state.
+let runActive = false;
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && runActive) saveGame();
+});
+window.addEventListener('beforeunload', () => { if (runActive) saveGame(); });
+
 function loadGame() {
   try {
     const raw = localStorage.getItem(SAVE_KEY);
@@ -189,6 +206,7 @@ function isPortrait() { return window.innerHeight > window.innerWidth; }
 
 function startGame(useSave) {
   if (isPortrait()) return false;
+  runActive = true;
   audioInit();
   hideEnd();
   hidePauseOverlay();
@@ -229,10 +247,15 @@ function showPauseOverlay() {
   if (prog) prog.textContent = jobProgressText();
   const ctl = document.getElementById('pause-controls');
   if (ctl) {
-    ctl.textContent = DEVICE_MODE === 'HP'
-      ? 'Left stick move · drag right side for camera · HIT fight · ACT interact / enter car · JUMP jump · MAP full map · CAM first-person'
-      : 'WASD move · Alt walk · Shift sprint · Space jump / brake · C crouch · J punch · K kick · 1 baseball bat · 2 pistol · 3 fists · 4 knife · F enter / exit car · E interact · M map · V first-person camera · P / Esc resume';
+    ctl.textContent = deviceMode() === 'HP'
+      ? 'Left stick move · drag right side for camera · HIT fight · ACT interact / enter car · JUMP jump · MAP full map · CAM first-person · BRAKE slows the car'
+      : 'WASD move · Alt walk · Shift sprint (foot) / brake (car) · S reverse (car, from stop) · Space jump ONLY · C crouch · J punch · K kick · 1 baseball bat · 2 pistol · 3 fists · 4 knife · F enter / exit car · E interact · M map · N mute · V first-person camera · P / Esc resume';
   }
+  // round 11 (P1-12 + P2-4): the pause panel's own buttons, labelled live
+  const muteBtn = document.getElementById('btn-mute');
+  if (muteBtn) muteBtn.textContent = audioIsMuted() ? 'UNMUTE (N)' : 'MUTE (N)';
+  const modeBtn = document.getElementById('btn-mode');
+  if (modeBtn) modeBtn.textContent = `MODE: ${deviceMode()} — SWITCH`;
   ov.style.display = 'flex';
 }
 function hidePauseOverlay() {
@@ -284,7 +307,7 @@ function endGame(kind) {
     if (againBtn) againBtn.style.display = 'inline-block';
     sfx.missionDone();
   } else if (kind === 'busted') {
-    const fine = Math.min(S.money, 100);
+    const fine = Math.min(S.money, CFG.bustedFine);
     S.money -= fine;
     title.textContent = 'BUSTED';
     title.style.color = '';
@@ -293,14 +316,21 @@ function endGame(kind) {
     if (againBtn) againBtn.style.display = 'none';
     sfx.busted();
   } else {
+    // round 11 (P2-6): WASTED carries the same light penalty frame as
+    // BUSTED - a clinic bill capped like the fine - and the end screen
+    // says so in plain words
+    const fine = Math.min(S.money, CFG.wastedFine);
+    S.money -= fine;
     title.textContent = 'WASTED';
     title.style.color = '';
-    text.textContent = 'Raka wakes up at the dock clinic with an empty head and a long bill. The bay gives him another morning.';
+    text.textContent = `Raka wakes up at the dock clinic with an empty head and a long bill. The clinic charges PB$ ${fine} for patching him up. The bay gives him another morning.`;
     if (okBtn) okBtn.textContent = 'BACK TO THE BAY';
     if (againBtn) againBtn.style.display = 'none';
   }
   overlay.style.display = 'flex';
   clearWanted();
+  // P0-1: the run's outcome (fine paid, job progress kept) is a save point
+  if (kind === 'busted' || kind === 'wasted') saveGame();
 }
 
 function hideEnd() {
@@ -318,6 +348,7 @@ function respawn() {
   S.mode = 'playing';
   S.paused = false;
   document.getElementById('hud').style.display = 'block';
+  saveGame(); // P0-1: respawning after busted/wasted writes the save
 }
 
 // After NAME CLEARED, FREE ROAM simply closes the summary and keeps
@@ -417,8 +448,21 @@ window.addEventListener('keyup', (e) => {
   if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') S.input.shiftHeld = false;
 });
 window.addEventListener('blur', () => { S.input.keys.clear(); S.input.altHeld = false; S.input.shiftHeld = false; });
-renderer.domElement.addEventListener('mousedown', () => {
+// Round 11 (P1-5): a mouse press is the START of a possible camera
+// drag, not an attack. The attack fires only on a CLEAN CLICK: button
+// released within 200 ms and the pointer barely moved (<6 px). A drag
+// of any real distance is purely camera (touch.js owns the orbiting).
+let mousePress = null;
+renderer.domElement.addEventListener('mousedown', (e) => {
+  mousePress = { t: performance.now(), x: e.clientX, y: e.clientY };
+});
+renderer.domElement.addEventListener('mouseup', (e) => {
+  if (!mousePress) return;
+  const heldMs = performance.now() - mousePress.t;
+  const movedPx = Math.hypot(e.clientX - mousePress.x, e.clientY - mousePress.y);
+  mousePress = null;
   if (S.mode !== 'playing') return;
+  if (heldMs >= 200 || movedPx >= 6) return; // it was a camera drag
   audioInit();
   if (WPN.active === 'pistol') shoot();
   else meleeAttack('punch');
@@ -449,6 +493,25 @@ document.getElementById('btn-end-ok').addEventListener('click', () => {
 });
 document.getElementById('btn-again').addEventListener('click', () => { hideEnd(); hideDialog(); startGame(false); });
 document.getElementById('btn-resume').addEventListener('click', () => pauseGame(false));
+// round 11 (P1-12): RESTART + MUTE + mode switch live in the pause panel
+// (and a restart on the end screen too) - not only on a hidden key
+{
+  const restart = () => { hideEnd(); hideDialog(); closeShop(); startGame(false); };
+  const r1 = document.getElementById('btn-restart');
+  if (r1) r1.addEventListener('click', restart);
+  const r2 = document.getElementById('btn-restart-end');
+  if (r2) r2.addEventListener('click', restart);
+  const muteBtn = document.getElementById('btn-mute');
+  if (muteBtn) muteBtn.addEventListener('click', () => {
+    audioInit();
+    muteBtn.textContent = audioToggleMute() ? 'UNMUTE (N)' : 'MUTE (N)';
+  });
+  const modeBtn = document.getElementById('btn-mode');
+  if (modeBtn) modeBtn.addEventListener('click', () => {
+    modeBtn.textContent = `MODE: ${cycleDeviceMode()} — SWITCH`;
+    refreshTouchVisibility();
+  });
+}
 if (hasSave()) document.getElementById('btn-continue').style.display = 'inline-block';
 
 // ---------------------------------------------------------------- per-frame
@@ -469,7 +532,10 @@ function updatePlayer(dt) {
       throttle = clamp(-S.input.joyY, -1, 1);
       steer = clamp(-S.input.joyX, -1, 1);
     }
-    const brake = keys.has('Space') || S.input.brakeTouch;
+    // round 11 (P1-4): Space is JUMP ONLY - it never brakes. The hand
+    // brake is Shift (either one); S from a standstill reverses, which
+    // updatePlayer already feeds in as throttle -1 above
+    const brake = keys.has('ShiftLeft') || keys.has('ShiftRight') || S.input.brakeTouch;
     driveStep(car, dt, throttle, steer, brake);
     if (!S.inCar) { // the car exploded mid-step and threw Raka clear
       playerGroup.visible = true;
@@ -559,14 +625,17 @@ function updatePlayer(dt) {
 
 let bustT = 0;
 function updateArrest(dt) {
-  if (W.stars <= 0) { bustT = 0; return; }
+  if (W.stars <= 0) { bustT = 0; S.arresting = false; return; }
   const slow = !S.inCar || Math.abs(S.currentCar ? S.currentCar.speed : 0) < 1;
   if (slow && W.seenByPolice && nearestPoliceDist() < CFG.bustedRadius) {
     bustT += dt;
-    if (bustT >= CFG.bustedTime) { bustT = 0; endGame('busted'); }
+    if (bustT >= CFG.bustedTime) { bustT = 0; S.arresting = false; endGame('busted'); }
   } else {
     bustT = Math.max(0, bustT - dt * 1.6);
   }
+  // population.js reads this: while the bust meter is filling, civilian
+  // attackers break off (P1-7) instead of beating Raka to death mid-arrest
+  S.arresting = bustT > 0;
 }
 
 function updatePrompt() {
@@ -750,6 +819,8 @@ function stateSnapshot() {
     shopOpen: S.shopOpen,
     dialogOpen: S.dialogOpen,
     paused: S.paused,
+    arresting: S.arresting,
+    shake: Math.round(shakeAmp * 100) / 100,
     stats: { earned: S.stats.earned, busted: S.stats.busted, wasted: S.stats.wasted, playT: Math.round(S.stats.playT * 10) / 10 },
   };
 }
@@ -811,7 +882,7 @@ window.PB = {
     hasHealth: 'health' in n, health: 'health' in n ? n.health : null,
     weapon: n.weapon || null, bar: !!(n.barT > 0),
   })),
-  modeInfo: () => ({ device: DEVICE_MODE, touchVisible: document.getElementById('touch-ui').style.display === 'block', tag: document.getElementById('mode-tag')?.textContent || '' }),
+  modeInfo: () => ({ device: deviceMode(), override: modeOverrideValue(), touchVisible: document.getElementById('touch-ui').style.display === 'block', tag: document.getElementById('mode-tag')?.textContent || '' }),
   objInfo,
   pauseInfo,
   missionLabels: () => MISSIONS.map((m) => ({ name: m.name, labels: m.stages.map((s) => s.label) })),
@@ -923,9 +994,10 @@ window.PB = {
   },
   startMission: (n) => {
     if (S.mode === 'menu') startGame(false);
-    const ok = startMission(n);
-    if (ok && n === 6) stageFinaleCrime();
-    return ok;
+    // round 11 (P1-2): no finale staging here any more - the internal
+    // startMission(6) in missions.js stages it, so the debug hook and
+    // the real talk-to-Mira / job-chain paths behave identically
+    return startMission(n);
   },
   commitCrime: () => punchNearest(),
   punchNearest: () => punchNearest(),
@@ -1038,10 +1110,27 @@ if (shotParam) {
 // ---------------------------------------------------------------- loop
 let lastNow = performance.now();
 let prevHealth = 100;
+// Round 11 (P2-1): screen shake - a small decaying camera impulse fed
+// by hard crashes and explosions (via S.shakeKick from vehicles.js)
+// and by damage taken (checkDamageFeedback below).
+let shakeAmp = 0;
+function addShake(a) { shakeAmp = Math.min(0.45, Math.max(shakeAmp, a)); }
+// the floater projector: hud.js owns the DOM nodes, this owns the camera
+const _floatV = new THREE.Vector3();
+setFloaterProjector((x, y, z) => {
+  _floatV.set(x, y, z).project(camera);
+  return {
+    sx: (_floatV.x * 0.5 + 0.5) * window.innerWidth,
+    sy: (-_floatV.y * 0.5 + 0.5) * window.innerHeight,
+    visible: _floatV.z < 1 && Math.abs(_floatV.x) <= 1.05 && Math.abs(_floatV.y) <= 1.05,
+  };
+});
 // When Raka's health drops, flash the damage vignette with a direction
 // arc pointing at the nearest attacker, genre-style (no gore, just UI).
 function checkDamageFeedback() {
   if (S.mode === 'playing' && S.health < prevHealth - 0.01) {
+    S.lastHurtAt = S.time; // catch-all for the regen gate (P2-7)
+    addShake(0.15);
     let src = null; let bd = 4.5;
     for (const n of S.npcs) {
       if (n.state !== 'attack' && n.state !== 'hostile') continue;
@@ -1068,9 +1157,18 @@ function loop() {
   const now = performance.now();
   let dt = (now - lastNow) / 1000;
   lastNow = now;
-  if (dt > 0.25) dt = 0.25;
+  // round 11 (P1-10): dt is clamped to 1/20 s - a slow frame slows the
+  // render, never stretches game time into slow motion; the physics
+  // substeps below keep every step at or under ~33 ms regardless
+  if (dt > 0.05) dt = 0.05;
   if (dt < 0) dt = 0;
+  if (shakeAmp > 0) shakeAmp = Math.max(0, shakeAmp - dt * 1.5);
   if (S.mode === 'playing') {
+    // round 11 (P1-3): an open dialog or shop PAUSES THE WORLD, exactly
+    // like the pause overlay - no NPC, police, traffic or clock moves
+    // behind the panel while Raka reads or shops
+    const frozen = S.dialogOpen || S.shopOpen;
+    if (!frozen) {
     // physics runs in fixed substeps so a slow frame can never stretch a
     // jump arc or a braking distance
     const steps = Math.max(1, Math.min(10, Math.ceil(dt / 0.033)));
@@ -1107,8 +1205,22 @@ function loop() {
     updateVehicleFx(dt);
     updateWeather(dt);
     updateTrafficLights(dt);
+    if (S.shakeKick > 0) { addShake(S.shakeKick); S.shakeKick = 0; }
+    // round 11 (P2-7): HP regen only starts after CFG.regenDelay
+    // seconds without taking damage - fights stay dangerous
+    if (S.health < 100 && S.time - S.lastHurtAt >= CFG.regenDelay) {
+      S.health = Math.min(100, S.health + dt * CFG.regenRate);
+    }
+    if (S.health <= 0 && S.mode === 'playing') endGame('wasted');
+    sirenUpdate(W.stars);
+    S.stats.playT += dt;
+    setMinimapTarget(currentTarget());
+    if (worldRefs.sea) worldRefs.sea.position.y = -0.25 + Math.sin(S.time * 0.7) * 0.05;
+    } // end of the not-frozen world block (P1-3)
     // drain queued camera drag at a capped azimuth rate (3.2 rad/s):
-    // a flick can never whip the view around in a single frame
+    // a flick can never whip the view around in a single frame - this
+    // stays live while a dialog/shop freezes the world, so the player
+    // can still look around while reading
     if (pendingYaw !== 0) {
       const step = clamp(pendingYaw, -3.2 * dt, 3.2 * dt);
       camYaw += step; pendingYaw -= step;
@@ -1120,18 +1232,31 @@ function loop() {
       pendingPitch -= (camPitch - before);
       if (camPitch === before) pendingPitch = 0;
     }
-    if (S.health < 100) S.health = Math.min(100, S.health + dt * 0.7);
-    if (S.health <= 0 && S.mode === 'playing') endGame('wasted');
-    sirenUpdate(W.stars);
-    S.stats.playT += dt;
-    setMinimapTarget(currentTarget());
-    if (worldRefs.sea) worldRefs.sea.position.y = -0.25 + Math.sin(S.time * 0.7) * 0.05;
   }
   updateDayNight();
   updatePrompt();
   updateCamera();
+  // screen shake (P2-1): a decaying random offset on the finished camera
+  if (shakeAmp > 0.004) {
+    camera.position.x += (Math.random() * 2 - 1) * shakeAmp;
+    camera.position.y += (Math.random() * 2 - 1) * shakeAmp * 0.7;
+  }
   updateObjectiveGuide();
+  // round 11 (P2-5 + P1-14): objective distance line under the toast;
+  // during job 5's chase it also carries the live tail distance + hold
+  if (S.mode === 'playing' && objState.target) {
+    let line = `Objective ${Math.round(objState.dist)} m`;
+    const st = M.active ? MISSIONS[M.index].stages[M.stageIdx] : null;
+    if (st && st.type === 'chase' && M.targetCar) {
+      const td = Math.round(dist2d(S.p.x, S.p.z, M.targetCar.x, M.targetCar.z) * 10) / 10;
+      line = `Tail ${td} m · hold ${M.tailT.toFixed(1)} / 3 s · ${line}`;
+    }
+    updateObjectiveDist(line);
+  } else {
+    updateObjectiveDist('');
+  }
   updateHUD(weaponsSnapshot());
+  updateFloaters();
   refreshTouchVisibility();
   renderer.render(scene, camera);
 }

@@ -6,7 +6,7 @@ import { S, CFG, dist2d } from './config.js';
 import { damageNPC, scareArea } from './population.js';
 import { reportCrime } from './wanted.js';
 import { sfx } from './audio.js';
-import { showHitMarker } from './hud.js';
+import { showHitMarker, floatText } from './hud.js';
 
 export const WPN = {
   owned: { fists: true, baton: false, pistol: false, knife: false },
@@ -110,11 +110,12 @@ export function meleeAttack(kind) {
   scareArea(S.p.x, S.p.z, 5);
   if (target) {
     const result = damageNPC(target, dmg);
-    if (result !== 'immune') showHitMarker();
+    if (result !== 'immune') { showHitMarker(); floatText(target.x, target.z, `-${dmg}`, '#ffffff'); }
     if (result !== 'immune' && result !== 'fled') {
       reportCrime(S.p.x, S.p.z, target);
     }
-    if (result === 'down' && target.kind === 'thug' && target.weapon) {
+    if (result === 'down' && target.kind === 'thug' && target.weapon && !target.hasDropped) {
+      target.hasDropped = true; // round 11: a risen thug never drops twice
       spawnDrop(target.weapon, target.x, target.z);
     }
   }
@@ -148,8 +149,9 @@ export function shoot() {
   const target = frontTarget(34, 0.32);
   if (target) {
     const result = damageNPC(target, CFG.bulletDamage);
-    if (result !== 'immune') { showHitMarker(); reportCrime(S.p.x, S.p.z, target); }
-    if (result === 'down' && target.kind === 'thug' && target.weapon) {
+    if (result !== 'immune') { showHitMarker(); floatText(target.x, target.z, `-${CFG.bulletDamage}`, '#ffffff'); reportCrime(S.p.x, S.p.z, target); }
+    if (result === 'down' && target.kind === 'thug' && target.weapon && !target.hasDropped) {
+      target.hasDropped = true; // round 11: a risen thug never drops twice
       spawnDrop(target.weapon, target.x, target.z);
     }
   } else {
@@ -158,21 +160,33 @@ export function shoot() {
   return true;
 }
 
-// A glowing ring on the ground where a fallen armed thug dropped a weapon.
+// A glowing ring on the ground where a fallen armed thug dropped a
+// weapon. Round 11 (P1-10): rings come from a small POOL - a picked-up
+// ring's mesh is hidden and reused for the next drop instead of a new
+// geometry/material being allocated for every felled thug.
 const dropGroup = new THREE.Group();
 let dropSceneReady = false;
+const dropPool = [];
 export function initDrops(scene) {
   if (!dropSceneReady) { scene.add(dropGroup); dropSceneReady = true; }
 }
 
 export function spawnDrop(weapon, x, z) {
-  const geo = new THREE.TorusGeometry(0.85, 0.09, 8, 24);
   const dropColor = weapon === 'pistol' ? 0xffd34d : (weapon === 'knife' ? 0x9fd4ff : (weapon === 'baton' ? 0xc9973f : 0x7ec8e3));
-  const mat = new THREE.MeshStandardMaterial({ color: dropColor, emissive: dropColor, emissiveIntensity: 0.9, roughness: 0.4 });
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.rotation.x = Math.PI / 2;
+  let mesh = dropPool.find((m) => !m.visible);
+  if (!mesh && dropPool.length < 8) {
+    const geo = new THREE.TorusGeometry(0.85, 0.09, 8, 24);
+    const mat = new THREE.MeshStandardMaterial({ color: dropColor, emissive: dropColor, emissiveIntensity: 0.9, roughness: 0.4 });
+    mesh = new THREE.Mesh(geo, mat);
+    mesh.rotation.x = Math.PI / 2;
+    dropGroup.add(mesh);
+    dropPool.push(mesh);
+  }
+  if (!mesh) mesh = dropPool[0];
+  mesh.material.color.setHex(dropColor);
+  mesh.material.emissive.setHex(dropColor);
   mesh.position.set(x, 0.35, z);
-  dropGroup.add(mesh);
+  mesh.visible = true;
   S.drops.push({ weapon, ammo: weapon === 'pistol' ? 12 : 0, x, z, mesh });
   return mesh;
 }
@@ -200,7 +214,7 @@ export function pickupDropAt(x, z) {
     if (dist2d(x, z, d.x, d.z) <= 2.1) {
       WPN.owned[d.weapon] = true;
       if (d.weapon === 'pistol') WPN.ammo += d.ammo;
-      dropGroup.remove(d.mesh);
+      d.mesh.visible = false; // back into the pool for the next drop
       S.drops.splice(i, 1);
       sfx.pickup();
       return d;

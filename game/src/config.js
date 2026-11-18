@@ -50,6 +50,31 @@ export const CFG = {
   attackWindow: 0.7,       // how long an attack reads as "active" (attackT)
   bustedRadius: 1.5,
   bustedTime: 3.5,
+  // round 11: numbers that used to be scattered across police.js,
+  // population.js, vehicles.js and the main loop now live here too -
+  // police response
+  policeSpeed: 6.2,          // foot pursuit speed (m/s)
+  policeSearchSpeed: 4.2,    // speed while hunting the last seen spot
+  policeShotCd: 2.6,         // seconds between police shots at 3+ stars
+  policeAimTime: 0.5,        // visible aim pause before a police shot lands
+  // NPC combat
+  npcHealth: 100,            // every adult human (children: no health at all)
+  npcHostileT: 8,            // seconds a hurt CIVILIAN stays hostile
+  thugHostileT: 14,          // thugs stay hostile longer
+  npcDownT: 9,               // seconds a felled adult stays down
+  npcHitCd: 1.1,             // seconds between an NPC's landed melee hits
+  npcShotCd: 1.7,            // seconds between an NPC's pistol shots
+  npcWindup: 0.4,            // melee telegraph: raised-arm wind-up (seconds)
+  carKillSpeed: 5.0,         // a car must be at least this fast (m/s) to kill
+  // endings & survival
+  bustedFine: 100,           // PB$ bail/fine, capped at the player's money
+  wastedFine: 100,           // PB$ clinic bill, same cap (round 11)
+  regenDelay: 9,             // seconds without damage before HP regen starts
+  regenRate: 0.7,            // HP per second once regen is running
+  explosionPlayerDamage: 26, // HP lost when your car blows up around you
+  // traffic
+  trafficCruiseBase: 7,      // cruise = base + random * var (m/s)
+  trafficCruiseVar: 3,
   // day / night cycle (seconds of game time for one full turn) and the
   // hard-impact count that blows a car up
   dayCycle: 300,
@@ -81,6 +106,9 @@ export const S = {
   },
   inCar: false,
   currentCar: null,        // vehicle record while driving
+  lastHurtAt: -100,        // game time the player last took damage (regen gate)
+  arresting: false,        // true while the bust meter is filling (main.js)
+  shakeKick: 0,            // screen-shake impulse set by vehicles.js events
   cameraY: CFG.camHeightStand,
   prompt: '',
   shopOpen: false,

@@ -13,11 +13,20 @@
   .panel { background: rgba(13, 22, 32, 0.78); border: 1px solid rgba(255, 211, 77, 0.35); border-radius: 10px; backdrop-filter: blur(3px); }
   /* ---------- HUD ---------- */
   #hud { position: fixed; inset: 0; pointer-events: none; display: none; }
-  #toast { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); max-width: min(680px, 92vw); padding: 9px 18px; font-size: 15px; font-weight: 600; color: #ffe9a8; text-align: center; opacity: 0; transition: opacity 0.35s; pointer-events: none; z-index: 25; }
-  #minimap-wrap { position: fixed; top: 12px; right: 12px; width: 148px; height: 148px; border-radius: 50%; overflow: hidden; border: 2px solid rgba(255,255,255,0.35); background: #8a8f66; pointer-events: auto; cursor: pointer; }
+  /* round 11 (P2-3): HUD anchors respect the device safe areas, so a
+     notch or a rounded corner never swallows the stats or the minimap */
+  #toast { position: fixed; top: calc(14px + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); max-width: min(680px, 92vw); padding: 9px 18px; font-size: 15px; font-weight: 600; color: #ffe9a8; text-align: center; opacity: 0; transition: opacity 0.35s; pointer-events: none; z-index: 25; }
+  #obj-dist { position: fixed; top: calc(58px + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); font-size: 12.5px; font-weight: 700; color: #bcd8e8; text-shadow: 0 1px 4px rgba(0,0,0,0.8); display: none; pointer-events: none; z-index: 25; }
+  #minimap-wrap { position: fixed; top: calc(12px + env(safe-area-inset-top)); right: calc(12px + env(safe-area-inset-right)); width: 148px; height: 148px; border-radius: 50%; overflow: hidden; border: 2px solid rgba(255,255,255,0.35); background: #8a8f66; pointer-events: auto; cursor: pointer; }
   #minimap { width: 148px; height: 148px; display: block; }
   /* compact stat stack: stars, money, health, weapon - no text panels */
-  #stats { position: fixed; top: 12px; left: 12px; width: 168px; padding: 7px 11px; }
+  #stats { position: fixed; top: calc(12px + env(safe-area-inset-top)); left: calc(12px + env(safe-area-inset-left)); width: 168px; padding: 7px 11px; }
+  /* round 11 (P1-6): the seen/unseen eye + the wanted decay bar */
+  #hud-seen { font-size: 12.5px; font-weight: 800; letter-spacing: 1px; display: none; margin-top: 2px; }
+  #hud-decay-track { height: 4px; background: rgba(255,255,255,0.15); border-radius: 3px; margin-top: 3px; overflow: hidden; }
+  #hud-decay-fill { height: 100%; width: 0%; background: #7ec8e3; transition: width 0.2s linear; }
+  /* round 11 (P2-1): floating damage / money texts (pool in hud.js) */
+  .floater { position: fixed; transform: translate(-50%, -50%); font-size: 16px; font-weight: 800; text-shadow: 0 1px 5px rgba(0,0,0,0.85); pointer-events: none; z-index: 24; white-space: nowrap; }
   /* ---------- full city map overlay ---------- */
   #map-overlay { position: fixed; inset: 0; background: rgba(6,12,20,0.93); display: none; z-index: 60; flex-direction: column; align-items: center; padding: 14px; }
   #map-overlay .map-bar { display: flex; align-items: center; gap: 18px; margin-bottom: 10px; }
@@ -25,15 +34,15 @@
   #map-close { pointer-events: auto; padding: 8px 18px; background: #31435c; color: #fff; border: 1px solid rgba(255,211,77,0.5); border-radius: 8px; font-weight: 700; cursor: pointer; }
   #bigmap { max-width: 94vw; max-height: 80vh; border: 2px solid rgba(255,255,255,0.35); border-radius: 10px; background: #14607e; }
   #map-overlay .map-legend { margin-top: 10px; font-size: 13px; color: #bcd8e8; text-align: center; }
-  #btn-map { right: 20px; top: 172px; }
-  #btn-cam { left: 18px; top: 118px; }
+  #btn-map { right: calc(20px + env(safe-area-inset-right)); top: calc(172px + env(safe-area-inset-top)); }
+  #btn-cam { left: calc(18px + env(safe-area-inset-left)); top: calc(118px + env(safe-area-inset-top)); }
   #hud-money { font-size: 17px; font-weight: 700; color: #ffd34d; }
   #hud-health-track { height: 8px; background: rgba(255,255,255,0.18); border-radius: 5px; margin: 5px 0; overflow: hidden; }
   #hud-health-fill { height: 100%; width: 100%; background: #57c256; transition: width 0.2s; }
   #hud-stars { font-size: 16px; color: #ffd34d; min-height: 19px; letter-spacing: 2px; }
   #hud-weapon { font-size: 12px; color: #bcd8e8; letter-spacing: 1px; }
-  #speedo { position: fixed; right: 26px; bottom: 96px; padding: 6px 14px; font-size: 21px; font-weight: 800; color: #ffe9a8; display: none; font-variant-numeric: tabular-nums; }
-  #prompt { position: fixed; right: 36px; bottom: 118px; width: 180px; padding: 10px 8px; text-align: center; font-weight: 700; font-size: 14.5px; color: #0d1620; background: #ffd34d; border-radius: 9px; display: none; box-shadow: 0 4px 18px rgba(0,0,0,0.4); }
+  #speedo { position: fixed; right: calc(26px + env(safe-area-inset-right)); bottom: calc(96px + env(safe-area-inset-bottom)); padding: 6px 14px; font-size: 21px; font-weight: 800; color: #ffe9a8; display: none; font-variant-numeric: tabular-nums; }
+  #prompt { position: fixed; right: calc(36px + env(safe-area-inset-right)); bottom: calc(118px + env(safe-area-inset-bottom)); width: 180px; padding: 10px 8px; text-align: center; font-weight: 700; font-size: 14.5px; color: #0d1620; background: #ffd34d; border-radius: 9px; display: none; box-shadow: 0 4px 18px rgba(0,0,0,0.4); }
   #banner { position: fixed; top: 64px; left: 50%; transform: translateX(-50%); padding: 10px 22px; font-size: 19px; font-weight: 700; color: #ffd34d; opacity: 0; transition: opacity 0.4s; pointer-events: none; }
   /* ---------- dialog ---------- */
   #dialog { position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%); width: min(620px, 92vw); display: none; gap: 12px; padding: 12px; align-items: flex-start; pointer-events: auto; }
@@ -85,13 +94,13 @@
   #hitmarker { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 15; opacity: 0; color: #fff; font-size: 21px; font-weight: 800; text-shadow: 0 0 6px rgba(0,0,0,0.7); }
   /* ---------- touch ---------- */
   #touch-ui { position: fixed; inset: 0; display: none; pointer-events: none; z-index: 20; }
-  #joy-base { position: fixed; left: 18px; bottom: 18px; width: 96px; height: 96px; border-radius: 50%; background: rgba(255,255,255,0.10); border: 2px solid rgba(255,255,255,0.3); pointer-events: auto; }
+  #joy-base { position: fixed; left: calc(18px + env(safe-area-inset-left)); bottom: calc(18px + env(safe-area-inset-bottom)); width: 96px; height: 96px; border-radius: 50%; background: rgba(255,255,255,0.10); border: 2px solid rgba(255,255,255,0.3); pointer-events: auto; }
   #joy-knob { position: absolute; left: 50%; top: 50%; width: 44px; height: 44px; margin: -22px 0 0 -22px; border-radius: 50%; background: rgba(255,211,77,0.75); }
   .tbtn { position: fixed; width: 52px; height: 52px; border-radius: 50%; background: rgba(13,22,32,0.72); border: 2px solid rgba(255,211,77,0.55); color: #ffe9a8; font-weight: 800; font-size: 11px; display: flex; align-items: center; justify-content: center; pointer-events: auto; user-select: none; -webkit-user-select: none; }
-  #btn-act { right: 20px; bottom: 20px; }
-  #btn-brake { right: 82px; bottom: 20px; display: none; }
-  #btn-jump { right: 20px; bottom: 82px; }
-  #btn-hit { right: 82px; bottom: 82px; }
+  #btn-act { right: calc(20px + env(safe-area-inset-right)); bottom: calc(20px + env(safe-area-inset-bottom)); }
+  #btn-brake { right: calc(82px + env(safe-area-inset-right)); bottom: calc(20px + env(safe-area-inset-bottom)); display: none; }
+  #btn-jump { right: calc(20px + env(safe-area-inset-right)); bottom: calc(82px + env(safe-area-inset-bottom)); }
+  #btn-hit { right: calc(82px + env(safe-area-inset-right)); bottom: calc(82px + env(safe-area-inset-bottom)); }
 </style>
 <script type="importmap">
 { "imports": { "three": "./vendor/three.module.min.js", "three/addons/": "./vendor/addons/" } }
@@ -102,9 +111,12 @@
 
 <div id="hud">
   <div id="toast" class="panel"></div>
+  <div id="obj-dist"></div>
   <div id="minimap-wrap"><canvas id="minimap" width="148" height="148"></canvas></div>
   <div id="stats" class="panel">
     <div id="hud-stars"></div>
+    <div id="hud-seen"></div>
+    <div id="hud-decay-track"><div id="hud-decay-fill"></div></div>
     <div id="hud-money">PB$ 0</div>
     <div id="hud-health-track"><div id="hud-health-fill"></div></div>
     <div id="hud-weapon">FISTS</div>
@@ -173,7 +185,7 @@
   </div>
   <div id="mode-tag"></div>
   <div id="menu-controls" class="controls">
-    WASD move · Space jump / brake · J / K fight · F enter car · E interact · P pause · M map · V first-person camera<br>
+    WASD move · Space jump ONLY · Shift sprint / car brake · S reverse from stop · J / K fight · F enter car · E interact · P pause · M map · N mute · V first-person camera<br>
     Wanted stars rise only when a crime is witnessed.
   </div>
 </div>
@@ -186,6 +198,11 @@
   <div id="pause-progress">Job 1 of 6</div>
   <div id="pause-controls"></div>
   <button id="btn-resume" class="big-btn">RESUME</button>
+  <div>
+    <button id="btn-restart" class="big-btn alt">RESTART</button>
+    <button id="btn-mute" class="big-btn alt">MUTE (N)</button>
+    <button id="btn-mode" class="big-btn alt">MODE: PC — SWITCH</button>
+  </div>
 </div>
 
 <div id="end-overlay" class="full-overlay">
@@ -193,6 +210,7 @@
   <div id="end-text"></div>
   <button id="btn-end-ok" class="big-btn">BACK TO THE BAY</button>
   <button id="btn-again" class="big-btn alt" style="display:none">PLAY AGAIN</button>
+  <button id="btn-restart-end" class="big-btn alt">RESTART STORY</button>
 </div>
 
 <div id="rotate-overlay">

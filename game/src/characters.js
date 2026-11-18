@@ -5,6 +5,7 @@
 // children are built WITHOUT any health field on purpose - the safety law
 // of the game is that a child can never be hurt, and the data shows it.
 import * as THREE from 'three';
+import { CFG } from './config.js';
 import { mergeColored, coloredStandard } from './merge.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.min.js';
 
@@ -36,9 +37,12 @@ function capsuleSegment(r, len, color) {
   geo.translate(0, -len / 2, 0);
   return { geo, color };
 }
-function limbMesh(parts) {
+function limbMesh(parts, shadow = true) {
   const m = new THREE.Mesh(mergeColored(parts), coloredStandard);
-  m.castShadow = true;
+  // round 11 (draw calls): forearm/shin segments skip the shadow pass -
+  // the upper segments still cast the limb's shadow, and every skipped
+  // caster is one less draw in the shadow map for ~44 people on screen
+  m.castShadow = shadow;
   return m;
 }
 
@@ -110,7 +114,7 @@ export function makePerson(opts = {}) {
       capsuleSegment(0.045, 0.30, shirtColor),
       { geo: new THREE.SphereGeometry(0.05, 8, 6), color: shirtColor },
       { geo: new THREE.SphereGeometry(0.052, 8, 6), color: skin, y: -0.30 },
-    ]);
+    ], false);
     fore.position.set(0, -0.32, 0);
     upper.add(fore);
     return { upper, fore };
@@ -127,7 +131,7 @@ export function makePerson(opts = {}) {
       capsuleSegment(0.06, 0.42, pants),
       { geo: new THREE.SphereGeometry(0.065, 8, 6), color: pants },
       { geo: new RoundedBoxGeometry(0.10, 0.07, 0.24, 2, 0.03), color: 0x1d1d20, y: -0.42, z: 0.045 },
-    ]);
+    ], false);
     shin.position.set(0, -0.46, 0);
     thigh.add(shin);
     return { upper: thigh, fore: shin };
@@ -283,7 +287,7 @@ export function makePersonRecord(kind, group, x, z) {
     gestureSeed: Math.random() * 6.28,
     socialT: 0, socialPartner: null,
   };
-  if (kind !== 'child') rec.health = 100;
+  if (kind !== 'child') rec.health = CFG.npcHealth;
   return rec;
 }
 

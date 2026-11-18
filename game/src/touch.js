@@ -10,6 +10,24 @@ export function isTouchCapable() {
   return ('ontouchstart' in window) || (navigator.maxTouchPoints || 0) > 0;
 }
 
+// Round 11 (P2-4): the PC/HP mode is no longer frozen at page load.
+// A manual override (the pause panel's MODE button) wins; otherwise
+// touch hardware means HP, and on hardware that reports no touch a
+// first real touch input still flips the session to HP.
+let modeOverride = null; // 'PC' | 'HP' | null
+let firstInputTouch = false;
+export function deviceMode() {
+  if (modeOverride) return modeOverride;
+  if (isTouchCapable() || firstInputTouch) return 'HP';
+  return 'PC';
+}
+export function setModeOverride(m) { modeOverride = (m === 'PC' || m === 'HP') ? m : null; }
+export function modeOverrideValue() { return modeOverride; }
+export function cycleDeviceMode() {
+  setModeOverride(deviceMode() === 'HP' ? 'PC' : 'HP');
+  return deviceMode();
+}
+
 let joyId = null;
 let joyCenter = { x: 0, y: 0 };
 // stick travel in px: matches the slimmed 96 px base / 44 px knob, and a
@@ -52,6 +70,7 @@ function bindButton(id, onDown, onUp) {
 }
 
 export function initTouch(hooks) {
+  window.addEventListener('touchstart', () => { firstInputTouch = true; }, { passive: true });
   const base = document.getElementById('joy-base');
   if (base) {
     const rect = () => { const r = base.getBoundingClientRect(); joyCenter = { x: r.x + r.width / 2, y: r.y + r.height / 2 }; };
@@ -149,7 +168,7 @@ export function stickSnapshot() {
 export function refreshTouchVisibility() {
   const ui = document.getElementById('touch-ui');
   if (!ui) return;
-  const show = isTouchCapable() && S.mode === 'playing';
+  const show = deviceMode() === 'HP' && S.mode === 'playing';
   ui.style.display = show ? 'block' : 'none';
   const brake = document.getElementById('btn-brake');
   if (brake) brake.style.display = show && S.inCar ? 'flex' : 'none';

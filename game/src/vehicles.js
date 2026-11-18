@@ -161,7 +161,7 @@ function makeCarRecord(scene, model, x, z, heading, traffic, colorOverride) {
     health: 100, dead: false,
     hardHits: 0, exploded: false, fx: null, lastCrashAt: -10,
     axis: Math.random() < 0.5 ? 'x' : 'z',
-    line: 0, dir: 1, cruise: 7 + Math.random() * 3,
+    line: 0, dir: 1, cruise: CFG.trafficCruiseBase + Math.random() * CFG.trafficCruiseVar,
     isTarget: false, isStolen: false,
   };
   if (traffic) {
@@ -175,8 +175,11 @@ function makeCarRecord(scene, model, x, z, heading, traffic, colorOverride) {
 }
 
 export function buildVehicles(scene) {
-  // parked, empty, takeable - the first one waits by the mission pickup point
-  makeCarRecord(scene, 'Baruna 4D', 3, 70, Math.PI / 2, false);
+  // parked, empty, takeable - the first one waits by the mission pickup
+  // point, on the SHOULDER at x=6.5 (round 11, P1-11): the traffic lanes
+  // run at x=+-3, and parking in one meant traffic ghosted through the
+  // job-1 car and shoved it sideways when Raka first pulled away
+  makeCarRecord(scene, 'Baruna 4D', 6.5, 70, Math.PI / 2, false);
   makeCarRecord(scene, 'Pijar City', -46, 14, 0, false);
   makeCarRecord(scene, 'Gelora GT', 46, -34, Math.PI, false);
   makeCarRecord(scene, 'Tangguh Pickup', -14, -76, Math.PI / 2, false);
@@ -245,7 +248,10 @@ export function driveStep(car, dt, throttle, steer, brake) {
   car.z = clamp(car.z, -CFG.worldHalf + 2, CFG.worldHalf + 20);
   const probe = { x: car.x, z: car.z };
   const preX = probe.x; const preZ = probe.z;
-  pushOut(probe, 1.5);
+  // round 11 (P1-11): the building-collision radius follows the model's
+  // own half-length, not one fixed 1.5 m circle - a 4.8 m pickup's nose
+  // no longer sinks into walls, and a short city car is not held 1 m off
+  pushOut(probe, spec.len / 2);
   const hitWall = Math.abs(probe.x - preX) > 0.01 || Math.abs(probe.z - preZ) > 0.01;
   // solid against other cars: the driven car is resolved out of every
   // other car's box (its own bulk counts as 0.45 of its length), so it
@@ -261,6 +267,7 @@ export function driveStep(car, dt, throttle, steer, brake) {
       car.lastCrashAt = S.time;
       const hard = hitWall && impact >= CFG.hardHitSpeed;
       sfx.crash(hard);
+      S.shakeKick = Math.max(S.shakeKick, hard ? 0.25 : 0.08); // P2-1 shake
       if (hard && !car.exploded) {
         car.hardHits++;
         if (car.hardHits >= CFG.hardHitsToExplode) explodeCar(car);
@@ -288,6 +295,7 @@ export function explodeCar(car) {
   const wasDriving = S.currentCar === car && S.inCar;
   car.speed = 0;
   sfx.explosion();
+  S.shakeKick = Math.max(S.shakeKick, 0.45); // P2-1: the blast kicks the camera
   // scorch: every painted/glass surface goes charcoal (materials are
   // cloned per car first so the fleet does not share the burn)
   car.group.traverse((o) => {
@@ -297,32 +305,52 @@ export function explodeCar(car) {
       if ('vertexColors' in o.material) o.material.vertexColors = false;
     }
   });
-  // particle burst: 70 points of fire and smoke with per-point velocity
-  const N = 70;
-  const pos = new Float32Array(N * 3);
-  const vel = [];
-  for (let i = 0; i < N; i++) {
-    pos[i * 3] = car.x; pos[i * 3 + 1] = 0.8; pos[i * 3 + 2] = car.z;
-    const a = Math.random() * Math.PI * 2;
-    vel.push([Math.sin(a) * (1 + Math.random() * 2.4), 2.4 + Math.random() * 3.6, Math.cos(a) * (1 + Math.random() * 2.4)]);
-  }
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  const mat = new THREE.PointsMaterial({ color: 0xff7a26, size: 0.55, transparent: true, opacity: 1 });
-  const points = new THREE.Points(geo, mat);
-  points.name = 'explosion-fx';
-  car.group.parent.add(points);
-  const light = new THREE.PointLight(0xff7a26, 60, 17, 1.8);
-  light.position.set(car.x, 1.6, car.z);
-  car.group.parent.add(light);
-  car.fx = { points, light, vel, t: 0, active: true };
+  // particle burst from the POOL (round 11, P1-10): a burst of fire and
+  // smoke points plus one point light, reused across explosions instead
+  // of allocating new geometry/materials/lights for every wreck
+  car.fx = spawnExplosionFx(car.group.parent, car.x, car.z);
   if (wasDriving) {
     // thrown clear of the wreck, hurt but alive
     exitCar();
     S.p.x = car.x + 3.4; S.p.z = car.z + 2.2;
     pushOut(S.p, 0.55);
-    S.health = Math.max(18, S.health - 26);
+    S.health = Math.max(18, S.health - CFG.explosionPlayerDamage);
+    S.lastHurtAt = S.time;
   }
+}
+
+const FX_POOL = [];
+const FX_PARTICLES = 70;
+function spawnExplosionFx(parent, x, z) {
+  let fx = FX_POOL.find((f) => !f.active);
+  if (!fx && FX_POOL.length < 4) {
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(FX_PARTICLES * 3), 3));
+    const mat = new THREE.PointsMaterial({ color: 0xff7a26, size: 0.55, transparent: true, opacity: 1 });
+    const points = new THREE.Points(geo, mat);
+    points.name = 'explosion-fx';
+    const light = new THREE.PointLight(0xff7a26, 60, 17, 1.8);
+    fx = { points, light, vel: [], t: 0, active: false };
+    FX_POOL.push(fx);
+  }
+  if (!fx) fx = FX_POOL[0]; // pool exhausted: steal the oldest burst
+  if (fx.points.parent !== parent && parent) { parent.add(fx.points); parent.add(fx.light); }
+  const pos = fx.points.geometry.attributes.position;
+  fx.vel.length = 0;
+  for (let i = 0; i < FX_PARTICLES; i++) {
+    pos.array[i * 3] = x; pos.array[i * 3 + 1] = 0.8; pos.array[i * 3 + 2] = z;
+    const a = Math.random() * Math.PI * 2;
+    fx.vel.push([Math.sin(a) * (1 + Math.random() * 2.4), 2.4 + Math.random() * 3.6, Math.cos(a) * (1 + Math.random() * 2.4)]);
+  }
+  pos.needsUpdate = true;
+  fx.points.material.color.setHex(0xff7a26);
+  fx.points.material.opacity = 1;
+  fx.points.visible = true;
+  fx.light.position.set(x, 1.6, z);
+  fx.light.intensity = 60;
+  fx.t = 0;
+  fx.active = true;
+  return fx;
 }
 
 // Animate live explosion effects (called from the main loop).
@@ -401,18 +429,22 @@ export function updateTraffic(dt) {
       }
     }
     c.speed = speed * c.dir;
+    // round 11 (P1-14): the job-5 tail target NEVER wraps - teleporting
+    // from one map edge to the other would break the tail through no
+    // fault of the player's. It turns around at the edge instead, so
+    // its loop stays one continuous, followable route while targeted.
     if (c.axis === 'x') {
       c.x += c.speed * dt;
       c.z = c.line;
       c.heading = c.dir > 0 ? Math.PI / 2 : -Math.PI / 2;
-      if (c.x > CFG.worldHalf - 4) c.x = -CFG.worldHalf + 4;
-      if (c.x < -CFG.worldHalf + 4) c.x = CFG.worldHalf - 4;
+      if (c.x > CFG.worldHalf - 4) { if (c.isTarget) { c.x = CFG.worldHalf - 4; c.dir = -1; } else c.x = -CFG.worldHalf + 4; }
+      if (c.x < -CFG.worldHalf + 4) { if (c.isTarget) { c.x = -CFG.worldHalf + 4; c.dir = 1; } else c.x = CFG.worldHalf - 4; }
     } else {
       c.z += c.speed * dt;
       c.x = c.line;
       c.heading = c.dir > 0 ? 0 : Math.PI;
-      if (c.z > CFG.worldHalf - 4) c.z = -CFG.worldHalf + 4;
-      if (c.z < -CFG.worldHalf + 4) c.z = CFG.worldHalf - 4;
+      if (c.z > CFG.worldHalf - 4) { if (c.isTarget) { c.z = CFG.worldHalf - 4; c.dir = -1; } else c.z = -CFG.worldHalf + 4; }
+      if (c.z < -CFG.worldHalf + 4) { if (c.isTarget) { c.z = -CFG.worldHalf + 4; c.dir = 1; } else c.z = CFG.worldHalf - 4; }
     }
     syncCarMesh(c);
   }

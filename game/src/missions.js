@@ -7,6 +7,7 @@ import { PLACES } from './world.js';
 import { reportCrime, clearWanted } from './wanted.js';
 import { nearestNPC } from './population.js';
 import { sfx } from './audio.js';
+import { floatText } from './hud.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.min.js';
 
 export const MISSIONS = [
@@ -15,7 +16,10 @@ export const MISSIONS = [
     intro: 'Raka, take the package by the shore road and drive it to the pier, then drop it at the cafe yard. Quietly.',
     stages: [
       { type: 'goto', x: -2, z: 74, label: 'Reach the pickup point by the shore road' },
-      { type: 'driveTo', x: -18, z: 98, label: 'Drive the package to Purnama Pier' },
+      // round 11 (P1-1): the pier drop sits at z=91, a few metres south
+      // of the dockworkers' pacing apron (homes z=96..106), so a careful
+      // delivery roll no longer has to cross their walking lines
+      { type: 'driveTo', x: -18, z: 91, label: 'Drive the package to Purnama Pier' },
       { type: 'driveTo', x: -30, z: 4, label: 'Drop the package at the cafe yard' },
     ],
   },
@@ -76,6 +80,7 @@ let sceneRef = null;
 let onObjective = () => {};
 let onDialog = () => {};
 let onGameClear = () => {};
+let onSave = () => {};
 
 export function missionsInit(scene, hooks) {
   sceneRef = scene;
@@ -83,6 +88,7 @@ export function missionsInit(scene, hooks) {
     onObjective = hooks.onObjective || onObjective;
     onDialog = hooks.onDialog || onDialog;
     onGameClear = hooks.onGameClear || onGameClear;
+    onSave = hooks.onSave || onSave;
   }
 }
 
@@ -96,6 +102,9 @@ export function missionSnapshot() {
     active: M.active,
     stage: stage ? stage.label : '',
     stageIdx: M.stageIdx,
+    // round 11 (P1-14): the tail target's live distance + held time
+    tailDist: M.targetCar ? Math.round(dist2d(S.p.x, S.p.z, M.targetCar.x, M.targetCar.z) * 10) / 10 : null,
+    tailT: Math.round(M.tailT * 10) / 10,
   };
 }
 
@@ -115,6 +124,11 @@ export function startMission(n) {
   setupStage();
   onDialog('mira', 'Mira Santoso', MISSIONS[idx].intro);
   pushObjective();
+  // round 11 (P1-2): the job-6 finale heat is staged from THIS internal
+  // path - the one talk-to-Mira and the completeMission chain actually
+  // take - not only from the debug hook, so a real run meets the
+  // syndicate frame-up the intro promises
+  if (idx === 5) stageFinaleCrime();
   return true;
 }
 
@@ -171,6 +185,8 @@ function completeMission() {
   S.stats.earned += def.reward;
   M.completed++;
   sfx.missionDone();
+  floatText(S.p.x, S.p.z, `+PB$ ${def.reward}`, '#ffd34d');
+  onSave(); // round 11 (P0-1): a finished job is a save point
   onDialog('mira', 'Mira Santoso', `Job done, Raka. PB$ ${def.reward} - it is yours, clean.`);
   if (M.index === 5) clearWanted();
   const next = M.index + 1;

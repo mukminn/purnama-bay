@@ -43,15 +43,19 @@ export function wantedSnapshot() {
   };
 }
 
-// Is there a witness for a crime committed at (x, z)? Adults nearby count,
-// the victim included; children never count and are never involved; a
-// police unit nearby also sees it.
-export function crimeIsWitnessed(x, z, victim) {
+// Is there a witness for a crime committed at (x, z)? Adults nearby count;
+// children never count and are never involved; a police unit nearby also
+// sees it. The victim counts as a witness of their own assault by default
+// (a punched citizen can report it) - EXCEPT when victimWitness is false:
+// a pedestrian killed by a car cannot report anything, so a road death is
+// only a crime when somebody ELSE (or a police unit) actually saw it.
+export function crimeIsWitnessed(x, z, victim, victimWitness = true) {
   for (const n of S.npcs) {
+    if (n === victim && !victimWitness) continue;
     if (n.kind === 'child' || n.kind === 'animal' || n.state === 'down' || n.state === 'dead') continue;
     if (dist2d(x, z, n.x, n.z) <= CFG.witnessRadius) return true;
   }
-  if (victim && victim.kind !== 'child' && victim.kind !== 'animal') return true;
+  if (victimWitness && victim && victim.kind !== 'child' && victim.kind !== 'animal') return true;
   for (const u of S.policeUnits) {
     if (dist2d(x, z, u.x, u.z) <= CFG.policeSeeRadius) return true;
   }
@@ -60,8 +64,8 @@ export function crimeIsWitnessed(x, z, victim) {
 
 // Report a crime through the one pipeline every crime uses.
 // Returns {seen, raised}.
-export function reportCrime(x, z, victim) {
-  const seen = crimeIsWitnessed(x, z, victim);
+export function reportCrime(x, z, victim, victimWitness = true) {
+  const seen = crimeIsWitnessed(x, z, victim, victimWitness);
   if (!seen) {
     W.crimesUnseen++;
     S.stats.crimesUnseen++;

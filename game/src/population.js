@@ -246,14 +246,15 @@ export function damageNPC(rec, dmg) {
   rec.health -= dmg;
   if (rec.health <= 0) {
     rec.state = 'down';
-    rec.downT = 9;
+    rec.downT = CFG.npcDownT;
     rec.animSpeed = 0;
     return 'down';
   }
-  // every surviving adult human fights back now, whatever their job
+  // every surviving adult human fights back now, whatever their job -
+  // but a civilian's nerve breaks sooner than a thug's (round 11)
   if (rec.state === 'stand' && rec.homeState === undefined) rec.homeState = 'stand';
   rec.state = 'hostile';
-  rec.hostileT = 14;
+  rec.hostileT = rec.kind === 'thug' ? CFG.thugHostileT : CFG.npcHostileT;
   rec.barT = 5;
   rec.fightPose = true;
   return 'hurt';
@@ -296,7 +297,7 @@ function checkCarHits(n) {
   for (const c of S.cars) {
     if (c.dead) continue;
     const spd = Math.abs(c.speed);
-    if (spd < 2.4) continue;
+    if (spd < CFG.carKillSpeed) continue;
     const dx = n.x - c.x; const dz = n.z - c.z;
     if (dx * dx + dz * dz > 16) continue;
     const fx = Math.sin(c.heading); const fz = Math.cos(c.heading);
@@ -316,7 +317,9 @@ function checkCarHits(n) {
     if (killNPC(n)) {
       sfx.crash(spd >= CFG.hardHitSpeed);
       scareArea(n.x, n.z, 9);
-      if (S.currentCar === c && S.inCar) reportCrime(n.x, n.z, n);
+      // round 11: the dead victim is NOT a witness - the death only
+      // becomes a crime when another adult (or a police unit) saw it
+      if (S.currentCar === c && S.inCar) reportCrime(n.x, n.z, n, false);
     }
     return;
   }
@@ -330,11 +333,19 @@ export function updatePopulation(dt) {
       n.downT -= dt;
       if (n.downT <= 0 && n.kind !== 'child') {
         n.state = 'wander';
-        if ('health' in n) n.health = 100;
+        if ('health' in n) n.health = CFG.npcHealth;
       }
       syncMesh(n); continue;
     }
-    if (n.kind !== 'animal') checkCarHits(n);
+    if (n.kind !== 'animal') {
+      // round 11 (P1-1): push the pedestrian OUT of every car body
+      // BEFORE the kill check runs, so a slow delivery roll over the
+      // apron shoves people aside instead of running them down
+      const pre = { x: n.x, z: n.z };
+      pushOutCars(pre, 0.35);
+      n.x = pre.x; n.z = pre.z;
+      checkCarHits(n);
+    }
     if (n.state === 'dead') { syncMesh(n); continue; }
     if (n.swingT > 0) n.swingT -= dt;
     // HP bar + fight pose for every adult human, refreshed each frame
@@ -387,7 +398,15 @@ export function updatePopulation(dt) {
       // fighters close on the player and strike; they give up after hostileT
       n.hostileT -= dt;
       const d = dist2d(n.x, n.z, p.x, p.z);
-      if (n.hostileT <= 0 || S.inCar) {
+      // round 11 (P1-7): a CIVILIAN stops fighting the moment the law
+      // closes in - a police unit within 13 m, or the bust meter already
+      // running - so an arrest is never a race against the victim's
+      // fists. Thugs keep fighting; they are syndicate, not citizens.
+      if (n.kind !== 'thug' && (S.arresting
+        || S.policeUnits.some((u) => dist2d(n.x, n.z, u.x, u.z) < 13))) {
+        n.state = 'flee'; n.fleeT = 2.5; n.fleeX = p.x; n.fleeZ = p.z;
+        n.aimPose = false; n.windupT = null;
+      } else if (n.hostileT <= 0 || S.inCar) {
         n.aimPose = false;
         if (n.homeX !== undefined && n.homeState === 'stand') n.state = 'return';
         else n.state = 'wander';
@@ -404,12 +423,12 @@ export function updatePopulation(dt) {
             n.aimPose = true;
             n.shotCd = (n.shotCd || 1.2) - dt;
             if (n.shotCd <= 0 && S.mode === 'playing') {
-              n.shotCd = 1.7;
+              n.shotCd = CFG.npcShotCd;
               n.closeT = 0;
               sfx.shot();
               n.swingT = 0.3;
               n.barT = 5;
-              if (d <= 16) S.health -= CFG.bulletDamage;
+              if (d <= 16) { S.health -= CFG.bulletDamage; S.lastHurtAt = S.time; }
               S.combat.fightT = CFG.fightModeTime;
             }
           } else {
@@ -423,26 +442,52 @@ export function updatePopulation(dt) {
           n.aimPose = true;
           n.shotCd = (n.shotCd || 1.2) - dt;
           if (n.shotCd <= 0 && S.mode === 'playing') {
-            n.shotCd = 1.7;
+            n.shotCd = CFG.npcShotCd;
             sfx.shot();
             n.swingT = 0.3;
             n.barT = 5;
-            if (d <= 16) S.health -= CFG.bulletDamage;
+            if (d <= 16) { S.health -= CFG.bulletDamage; S.lastHurtAt = S.time; }
             S.combat.fightT = CFG.fightModeTime;
           }
         }
-      } else if (d > 1.7) { n.state = 'hostile'; n.aimPose = false; steer(n, p.x, p.z, 4.6, dt); }
+      } else if (d > 1.7) { n.state = 'hostile'; n.aimPose = false; n.windupT = null; steer(n, p.x, p.z, 4.6, dt); }
       else {
+        // round 11 (P1-8): melee is TELEGRAPHED. Entering range starts
+        // a wind-up (arm raised by the swing pose + a whoosh); the hit
+        // only lands when the wind-up completes AND the player is still
+        // in reach - stepping away during the wind-up dodges it clean.
         n.state = 'attack'; n.animSpeed = 0; n.aimPose = false;
         n.heading = Math.atan2(p.x - n.x, p.z - n.z);
-        n.hitCd = (n.hitCd || 0) - dt;
-        if (n.hitCd <= 0 && !S.inCar && S.mode === 'playing') {
-          n.hitCd = 1.1;
-          S.health -= n.weapon === 'baton' ? CFG.batonDamage : (n.weapon === 'knife' ? CFG.knifeDamage : CFG.punchDamage);
-          S.combat.fightT = CFG.fightModeTime;
-          n.swingT = 0.35;
+        if (n.hitCd > 0) n.hitCd -= dt;
+        if (n.windupT == null && (n.hitCd || 0) <= 0 && !S.inCar && S.mode === 'playing') {
+          n.windupT = CFG.npcWindup;
+          n.swingT = CFG.npcWindup + 0.1; // raised-arm pose reads as the telegraph
           n.swingKind = 'punch';
-          n.barT = 5;
+          sfx.windup();
+        }
+        if (n.windupT != null) {
+          n.windupT -= dt;
+          if (n.windupT <= 0) {
+            n.windupT = null;
+            n.hitCd = CFG.npcHitCd;
+            const stillInReach = dist2d(n.x, n.z, p.x, p.z) <= 2.2;
+            const arrestShield = n.kind !== 'thug' && S.arresting; // P1-7: no civilian damage mid-arrest
+            if (stillInReach && !arrestShield && !S.inCar && S.mode === 'playing') {
+              S.health -= n.weapon === 'baton' ? CFG.batonDamage : (n.weapon === 'knife' ? CFG.knifeDamage : CFG.punchDamage);
+              S.lastHurtAt = S.time;
+              S.combat.fightT = CFG.fightModeTime;
+              n.swingT = 0.35;
+              n.swingKind = 'punch';
+              n.barT = 5;
+              // a civilian who has landed two hits has made their point:
+              // they break off and run (thugs never do)
+              n.landedHits = (n.landedHits || 0) + 1;
+              if (n.kind !== 'thug' && n.landedHits >= 2) {
+                n.state = 'flee'; n.fleeT = 2.5; n.fleeX = p.x; n.fleeZ = p.z;
+                n.landedHits = 0;
+              }
+            }
+          }
         }
       }
     } else if (n.state === 'return') {
