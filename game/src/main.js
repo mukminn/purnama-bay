@@ -50,11 +50,13 @@ let pendingPitch = 0;
 let camMode = 'third'; // W4: 'third' | 'first'
 
 // W4/E: the full-map toggle is game-level: opening the map pauses the
-// world, closing resumes; an open shop swallows the key entirely.
+// world, closing resumes; an open shop swallows the key entirely. Map
+// pauses use reason 'map' so they never raise the pause panel - the map
+// has its own overlay.
 function toggleMapGame() {
   if (S.shopOpen) return;
-  if (isMapOpen()) { closeMap(); pauseGame(false); return; }
-  if (S.mode === 'playing') { openMap(); pauseGame(true); }
+  if (isMapOpen()) { closeMap(); pauseGame(false, 'map'); return; }
+  if (S.mode === 'playing') { openMap(); pauseGame(true, 'map'); }
 }
 function toggleCamMode() {
   camMode = camMode === 'third' ? 'first' : 'third';
@@ -89,16 +91,29 @@ for (const prop of Object.values(playerProps)) {
 // the player's overhead HP bar, visible while fight mode is up
 const playerBar = createBar(playerGroup);
 
-// a soft disc marker that floats over the current mission target
-const marker = new THREE.Mesh(
-  new THREE.CylinderGeometry(1.6, 1.6, 14, 20, 1, true),
-  new THREE.MeshStandardMaterial({ color: 0xffd34d, emissive: 0xffd34d, emissiveIntensity: 0.7, transparent: true, opacity: 0.3, side: THREE.DoubleSide, depthWrite: false }));
-marker.visible = false;
-scene.add(marker);
+// Objective beacon: a slim, tall column of additive gold light plus a
+// ground ring at the current target, pulsing gently - visible from
+// anywhere in the bay so the player always knows where to go. It is
+// shown only while playing and only while a target exists.
+// (Standard materials, not Basic: the PBR material census in the probes
+// allows exactly one Basic surface in the scene - the sky dome.)
+const beaconMat = new THREE.MeshStandardMaterial({ color: 0x1a1405, emissive: 0xffd34d, emissiveIntensity: 1.7, transparent: true, opacity: 0.38, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, depthWrite: false });
+const beacon = new THREE.Group();
+const beaconColumn = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 70, 12, 1, true), beaconMat);
+beaconColumn.position.y = 35;
+const beaconRingMat = new THREE.MeshStandardMaterial({ color: 0x1a1405, emissive: 0xffd34d, emissiveIntensity: 1.7, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, depthWrite: false });
+const beaconRing = new THREE.Mesh(new THREE.RingGeometry(1.25, 1.95, 28), beaconRingMat);
+beaconRing.rotation.x = -Math.PI / 2;
+beaconRing.position.y = 0.18;
+beacon.add(beaconColumn);
+beacon.add(beaconRing);
+beacon.visible = false;
+scene.add(beacon);
 
 missionsInit(scene, {
   onObjective: (t) => setObjective(t),
   onDialog: (who, name, text) => showDialog(who, name, text),
+  onGameClear: () => endGame('clear'),
 });
 initHUD({
   onBuy: (item) => { const msg = buyItem(item); refreshShop(msg); },
@@ -123,6 +138,10 @@ function resetRun() {
   S.money = 0;
   S.health = 100;
   S.time = 0;
+  S.stats.earned = 0;
+  S.stats.busted = 0;
+  S.stats.wasted = 0;
+  S.stats.playT = 0;
   clearWanted();
   WPN.owned = { fists: true, baton: false, pistol: false, knife: false };
   WPN.active = 'fists';
@@ -172,6 +191,7 @@ function startGame(useSave) {
   if (isPortrait()) return false;
   audioInit();
   hideEnd();
+  hidePauseOverlay();
   document.getElementById('menu').style.display = 'none';
   document.getElementById('hud').style.display = 'block';
   S.mode = 'playing';
@@ -180,34 +200,104 @@ function startGame(useSave) {
     showBanner('Welcome back to Purnama Bay');
   } else {
     resetRun();
-    startMission(1);
+    // Guided opening (clarity round): NO auto-started mission. Raka
+    // spawns facing Mira on the pier, the beacon + edge arrow + minimap
+    // all point at her, and one concrete toast says what to do. Job 1
+    // starts through the normal path - press E near Mira (tryInteract).
+    S.p.heading = Math.atan2(CFG.miraSpot.x - S.p.x, CFG.miraSpot.z - S.p.z);
+    camYaw = S.p.heading;
+    setObjective('Meet Mira at the pier.');
   }
   refreshTouchVisibility();
   return true;
 }
 
-function pauseGame(on) {
+// ---------------------------------------------------------------- pause
+// The pause panel (GOAL & CONTROLS) shows only for an explicit pause
+// (P / Esc / PB.pause / RESUME button). Map pauses pass reason 'map'
+// and never raise it - the map overlay is its own screen.
+let pauseReason = '';
+function jobProgressText() {
+  if (M.completed >= MISSIONS.length) return 'All 6 jobs done';
+  if (M.active) return `Job ${M.index + 1} of 6`;
+  return `Job ${M.completed + 1} of 6`;
+}
+function showPauseOverlay() {
+  const ov = document.getElementById('pause-overlay');
+  if (!ov) return;
+  const prog = document.getElementById('pause-progress');
+  if (prog) prog.textContent = jobProgressText();
+  const ctl = document.getElementById('pause-controls');
+  if (ctl) {
+    ctl.textContent = DEVICE_MODE === 'HP'
+      ? 'Left stick move · drag right side for camera · HIT fight · ACT interact / enter car · JUMP jump · MAP full map · CAM first-person'
+      : 'WASD move · Alt walk · Shift sprint · Space jump / brake · C crouch · J punch · K kick · 1 baseball bat · 2 pistol · 3 fists · 4 knife · F enter / exit car · E interact · M map · V first-person camera · P / Esc resume';
+  }
+  ov.style.display = 'flex';
+}
+function hidePauseOverlay() {
+  const ov = document.getElementById('pause-overlay');
+  if (ov) ov.style.display = 'none';
+}
+function pauseInfo() {
+  const ov = document.getElementById('pause-overlay');
+  const visible = !!ov && ov.style.display === 'flex';
+  return { visible, text: visible ? (ov.textContent || '').replace(/\s+/g, ' ').trim() : '' };
+}
+function pauseGame(on, reason) {
   if (S.mode !== 'playing' && S.mode !== 'paused') return;
   S.paused = !!on;
   S.mode = on ? 'paused' : 'playing';
+  if (on) {
+    pauseReason = reason || 'explicit';
+    if (pauseReason === 'explicit') showPauseOverlay();
+  } else {
+    pauseReason = '';
+    hidePauseOverlay();
+  }
+}
+
+function fmtPlayTime(sec) {
+  const s = Math.max(0, Math.floor(sec));
+  return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 }
 
 function endGame(kind) {
   if (S.mode === 'ended') return;
   S.mode = 'ended';
   S.endedKind = kind;
+  hidePauseOverlay();
   const overlay = document.getElementById('end-overlay');
   const title = document.getElementById('end-title');
   const text = document.getElementById('end-text');
-  if (kind === 'busted') {
+  const okBtn = document.getElementById('btn-end-ok');
+  const againBtn = document.getElementById('btn-again');
+  if (kind === 'busted') S.stats.busted++;
+  if (kind === 'wasted') S.stats.wasted++;
+  if (kind === 'clear') {
+    // Story won: all 6 jobs done. FREE ROAM keeps playing right where
+    // Raka stands (no respawn); PLAY AGAIN restarts the whole story.
+    title.textContent = 'NAME CLEARED';
+    title.style.color = '#ffd34d';
+    text.textContent = `Raka's name is clean - the Kala Syndicate frame-up is finished. Total earned: PB$ ${S.stats.earned} · Time played: ${fmtPlayTime(S.stats.playT)} · Busted ${S.stats.busted}x · Wasted ${S.stats.wasted}x.`;
+    if (okBtn) okBtn.textContent = 'FREE ROAM';
+    if (againBtn) againBtn.style.display = 'inline-block';
+    sfx.missionDone();
+  } else if (kind === 'busted') {
     const fine = Math.min(S.money, 100);
     S.money -= fine;
     title.textContent = 'BUSTED';
+    title.style.color = '';
     text.textContent = `The harbour police finally cornered Raka. Bail and fines cost PB$ ${fine}, and the bay forgets his face - for now.`;
+    if (okBtn) okBtn.textContent = 'BACK TO THE BAY';
+    if (againBtn) againBtn.style.display = 'none';
     sfx.busted();
   } else {
     title.textContent = 'WASTED';
+    title.style.color = '';
     text.textContent = 'Raka wakes up at the dock clinic with an empty head and a long bill. The bay gives him another morning.';
+    if (okBtn) okBtn.textContent = 'BACK TO THE BAY';
+    if (againBtn) againBtn.style.display = 'none';
   }
   overlay.style.display = 'flex';
   clearWanted();
@@ -228,6 +318,17 @@ function respawn() {
   S.mode = 'playing';
   S.paused = false;
   document.getElementById('hud').style.display = 'block';
+}
+
+// After NAME CLEARED, FREE ROAM simply closes the summary and keeps
+// playing exactly where Raka is - no teleport, no reset.
+function freeRoam() {
+  hideEnd();
+  hideDialog();
+  S.mode = 'playing';
+  S.paused = false;
+  document.getElementById('hud').style.display = 'block';
+  setObjective('Free roam - the bay is yours. The ferry story is told.');
 }
 
 // ---------------------------------------------------------------- input
@@ -342,7 +443,12 @@ initTouch({
 
 document.getElementById('btn-start').addEventListener('click', () => startGame(false));
 document.getElementById('btn-continue').addEventListener('click', () => startGame(true));
-document.getElementById('btn-end-ok').addEventListener('click', () => respawn());
+document.getElementById('btn-end-ok').addEventListener('click', () => {
+  if (S.endedKind === 'clear') freeRoam();
+  else respawn();
+});
+document.getElementById('btn-again').addEventListener('click', () => { hideEnd(); hideDialog(); startGame(false); });
+document.getElementById('btn-resume').addEventListener('click', () => pauseGame(false));
 if (hasSave()) document.getElementById('btn-continue').style.display = 'inline-block';
 
 // ---------------------------------------------------------------- per-frame
@@ -473,7 +579,12 @@ function updatePrompt() {
 }
 
 function currentTarget() {
-  if (!M.active) return null;
+  if (!M.active) {
+    // Guided opening: before job 1 has started, every guide (beacon,
+    // edge arrow, minimap) points at Mira - she is the first objective.
+    if (M.completed === 0) return { x: CFG.miraSpot.x, z: CFG.miraSpot.z };
+    return null;
+  }
   const st = MISSIONS[M.index].stages[M.stageIdx];
   if (!st) return null;
   if (st.type === 'collect') {
@@ -540,6 +651,77 @@ function updateCamera() {
   S.cameraY = camera.position.y;
 }
 
+// ------------------------------------------------- objective guidance
+// Every frame: place the world beacon on the current target, and drive
+// the #obj-arrow edge indicator. The arrow appears only when the target
+// is off-screen or behind the camera; when the target is comfortably
+// in view the beacon itself is the guide and the arrow hides.
+const objState = { target: null, dist: 0, relDeg: 0, arrowVisible: false, beaconVisible: false };
+const _objV = new THREE.Vector3();
+const _objFwd = new THREE.Vector3();
+function updateObjectiveGuide() {
+  const t = S.mode === 'playing' || S.mode === 'paused' ? currentTarget() : null;
+  const arrowEl = document.getElementById('obj-arrow');
+  objState.target = t ? { x: t.x, z: t.z } : null;
+  objState.dist = 0;
+  objState.relDeg = 0;
+  objState.arrowVisible = false;
+  if (!t || S.mode !== 'playing') {
+    beacon.visible = false;
+    objState.beaconVisible = false;
+    if (arrowEl) arrowEl.style.display = 'none';
+    return;
+  }
+  const dx = t.x - S.p.x;
+  const dz = t.z - S.p.z;
+  objState.dist = Math.round(Math.hypot(dx, dz) * 10) / 10;
+  // bearing of the target vs the camera's view direction, -180..180
+  const bearing = Math.atan2(dx, dz);
+  let rel = bearing - camYaw;
+  while (rel > Math.PI) rel -= Math.PI * 2;
+  while (rel < -Math.PI) rel += Math.PI * 2;
+  objState.relDeg = Math.round(rel * 180 / Math.PI * 10) / 10;
+  // world beacon: position + gentle pulse
+  beacon.position.set(t.x, 0, t.z);
+  const pulse = 0.5 + 0.5 * Math.sin(S.time * 3.2);
+  beaconMat.opacity = 0.26 + 0.2 * pulse;
+  beaconRingMat.opacity = 0.4 + 0.3 * pulse;
+  const rs = 1 + 0.18 * pulse;
+  beaconRing.scale.set(rs, rs, 1);
+  beacon.visible = true;
+  objState.beaconVisible = true;
+  // edge arrow: is the target inside the central view right now?
+  camera.updateMatrixWorld();
+  _objV.set(t.x, 1.6, t.z).project(camera);
+  camera.getWorldDirection(_objFwd);
+  const behind = (_objFwd.x * dx + _objFwd.z * dz) <= 0;
+  const onScreen = !behind && Math.abs(_objV.x) <= 0.8 && Math.abs(_objV.y) <= 0.8;
+  if (arrowEl) {
+    if (onScreen) {
+      arrowEl.style.display = 'none';
+    } else {
+      const relRad = rel;
+      const r = Math.max(60, Math.min(window.innerWidth, window.innerHeight) / 2 - 56);
+      const ax = window.innerWidth / 2 - Math.sin(relRad) * r;
+      const ay = window.innerHeight / 2 - Math.cos(relRad) * r;
+      arrowEl.style.left = `${ax}px`;
+      arrowEl.style.top = `${ay}px`;
+      arrowEl.style.transform = `rotate(${(-objState.relDeg).toFixed(1)}deg)`;
+      arrowEl.style.display = 'block';
+      objState.arrowVisible = true;
+    }
+  }
+}
+function objInfo() {
+  return {
+    target: objState.target ? { ...objState.target } : null,
+    dist: objState.dist,
+    relDeg: objState.relDeg,
+    arrowVisible: objState.arrowVisible,
+    beaconVisible: objState.beaconVisible,
+  };
+}
+
 // ---------------------------------------------------------------- PB hook
 function stateSnapshot() {
   const p = S.p;
@@ -568,6 +750,7 @@ function stateSnapshot() {
     shopOpen: S.shopOpen,
     dialogOpen: S.dialogOpen,
     paused: S.paused,
+    stats: { earned: S.stats.earned, busted: S.stats.busted, wasted: S.stats.wasted, playT: Math.round(S.stats.playT * 10) / 10 },
   };
 }
 
@@ -629,6 +812,9 @@ window.PB = {
     weapon: n.weapon || null, bar: !!(n.barT > 0),
   })),
   modeInfo: () => ({ device: DEVICE_MODE, touchVisible: document.getElementById('touch-ui').style.display === 'block', tag: document.getElementById('mode-tag')?.textContent || '' }),
+  objInfo,
+  pauseInfo,
+  missionLabels: () => MISSIONS.map((m) => ({ name: m.name, labels: m.stages.map((s) => s.label) })),
   combatInfo: () => ({ cfg: { punch: CFG.punchDamage, kick: CFG.kickDamage, knife: CFG.knifeDamage, bat: CFG.batonDamage, bullet: CFG.bulletDamage, maxHealth: 100 }, player: { health: S.health, fightMode: S.combat.fightT > 0, fightT: +S.combat.fightT.toFixed(2) }, npcs: S.npcs.filter((n) => n.kind !== 'animal').map((n) => ({ id: S.npcs.indexOf(n), kind: n.kind, weapon: n.weapon || null, hasHealth: 'health' in n, health: 'health' in n ? n.health : null, state: n.state, bar: !!(n.barT > 0), x: Math.round(n.x * 10) / 10, z: Math.round(n.z * 10) / 10 })) }),
   bodyMetrics: () => { const bb = new THREE.Box3(); playerGroup.traverse((o) => { if (o.isMesh) bb.union(new THREE.Box3().setFromObject(o)); }); const head = playerGroup.userData.parts.headMesh; const hb = head ? new THREE.Box3().setFromObject(head) : bb; return { height: +(bb.max.y - bb.min.y).toFixed(3), headHeight: +(hb.max.y - hb.min.y).toFixed(3), ratio: +((bb.max.y - bb.min.y) / (hb.max.y - hb.min.y)).toFixed(2) }; },
   counts: countsSnapshot,
@@ -937,18 +1123,14 @@ function loop() {
     if (S.health < 100) S.health = Math.min(100, S.health + dt * 0.7);
     if (S.health <= 0 && S.mode === 'playing') endGame('wasted');
     sirenUpdate(W.stars);
-    const t = currentTarget();
-    setMinimapTarget(t);
-    marker.visible = !!t && !S.inCar;
-    if (t) {
-      marker.position.set(t.x, 7, t.z);
-      marker.rotation.y += dt;
-    }
+    S.stats.playT += dt;
+    setMinimapTarget(currentTarget());
     if (worldRefs.sea) worldRefs.sea.position.y = -0.25 + Math.sin(S.time * 0.7) * 0.05;
   }
   updateDayNight();
   updatePrompt();
   updateCamera();
+  updateObjectiveGuide();
   updateHUD(weaponsSnapshot());
   refreshTouchVisibility();
   renderer.render(scene, camera);

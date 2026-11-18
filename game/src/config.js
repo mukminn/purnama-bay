@@ -104,7 +104,13 @@ export const S = {
   // genre-style feedback counters: hit-marker flashes for the player's own
   // landed attacks, red vignette flashes when the player takes damage
   feedback: { hits: 0, flashes: 0 },
-  stats: { shotsFired: 0, crimesSeen: 0, crimesUnseen: 0 },
+  stats: {
+    shotsFired: 0, crimesSeen: 0, crimesUnseen: 0,
+    // clarity-round run statistics for the NAME CLEARED summary screen:
+    // earned = total PB$ paid by Mira's jobs this run, busted / wasted =
+    // how many times the run ended that way, playT = seconds played
+    earned: 0, busted: 0, wasted: 0, playT: 0,
+  },
 };
 
 export function dist2d(ax, az, bx, bz) {

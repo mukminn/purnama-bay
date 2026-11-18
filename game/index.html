@@ -52,7 +52,20 @@
   /* ---------- menu / end ---------- */
   .full-overlay { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; background: linear-gradient(180deg, rgba(44,40,94,0.50), rgba(20,14,34,0.88)); z-index: 40; padding: 20px; }
   #menu h1 { font-size: clamp(38px, 8vw, 74px); letter-spacing: 3px; color: #ffd34d; text-shadow: 0 4px 0 #d94f70, 0 8px 26px rgba(0,0,0,0.6); }
-  #menu .tag { font-size: clamp(14px, 2.4vw, 19px); color: #ffe9a8; margin: 10px 0 22px; max-width: 640px; line-height: 1.5; }
+  #menu-fantasy { font-size: clamp(16px, 2.6vw, 21px); font-weight: 700; color: #ffe9a8; margin: 12px 0 2px; }
+  #menu-goal { font-size: clamp(15px, 2.4vw, 19px); color: #ffd34d; margin: 0 0 14px; }
+  #menu-howto { font-size: 14.5px; color: #bcd8e8; line-height: 1.7; margin: 0 0 20px; }
+  #menu-howto b { color: #ffe9a8; }
+  /* objective edge arrow: points at the target when it is off-screen */
+  #obj-arrow { position: fixed; width: 44px; height: 44px; margin: -22px 0 0 -22px; border-radius: 50%; background: rgba(13,22,32,0.82); border: 2px solid #ffd34d; color: #ffd34d; font-size: 21px; line-height: 40px; text-align: center; display: none; pointer-events: none; z-index: 26; }
+  /* pause panel: goal + progress + controls for the active mode */
+  #pause-overlay { display: none; z-index: 55; }
+  #pause-overlay h1 { font-size: clamp(30px, 6vw, 48px); letter-spacing: 3px; color: #ffd34d; }
+  #pause-overlay .pause-goal-title { margin-top: 16px; font-size: 13px; font-weight: 800; letter-spacing: 3px; color: #7ec8e3; }
+  #pause-fantasy { font-size: 17px; font-weight: 700; color: #ffe9a8; margin-top: 6px; }
+  #pause-goal { font-size: 15.5px; color: #ffd34d; }
+  #pause-progress { margin-top: 12px; font-size: 16px; font-weight: 800; color: #ffffff; }
+  #pause-controls { margin: 14px 0 20px; font-size: 13.5px; color: #bcd8e8; line-height: 1.8; max-width: 620px; }
   .big-btn { padding: 14px 44px; font-size: 19px; font-weight: 800; letter-spacing: 1px; background: #ffd34d; color: #0d1620; border: 0; border-radius: 10px; cursor: pointer; margin: 5px; box-shadow: 0 5px 0 #b8860b; }
   .big-btn.alt { background: #0f7d8c; color: #fff; box-shadow: 0 5px 0 #0a4f59; }
   #menu .controls { margin-top: 24px; font-size: 13.5px; color: #bcd8e8; line-height: 1.8; max-width: 660px; }
@@ -99,6 +112,7 @@
   <div id="speedo" class="panel"></div>
   <div id="prompt"></div>
   <div id="banner" class="panel"></div>
+  <div id="obj-arrow">&#9650;</div>
 </div>
 
 <div id="dialog" class="panel">
@@ -146,25 +160,39 @@
 
 <div id="menu" class="full-overlay">
   <h1>PURNAMA BAY</h1>
-  <div class="tag">Raka Pradana, a pier courier framed by the Kala Syndicate, takes six jobs from Mira Santoso to clear his name in a sun-soaked coastal city. Drive, sneak, chase - and watch who sees you.</div>
+  <div id="menu-fantasy">You are Raka, a framed pier courier.</div>
+  <div id="menu-goal">Finish Mira's 6 jobs to clear your name.</div>
+  <div id="menu-howto">
+    <div><b>Drive</b> — steal &amp; drive any car</div>
+    <div><b>Fight</b> — fists, bat, knife, pistol</div>
+    <div><b>Earn</b> — jobs pay PB$, money comes only from Mira</div>
+  </div>
   <div>
     <button id="btn-start" class="big-btn">START</button>
     <button id="btn-continue" class="big-btn alt" style="display:none">CONTINUE</button>
   </div>
   <div id="mode-tag"></div>
   <div id="menu-controls" class="controls">
-    WASD move · Alt walk · Shift sprint · Space jump / brake · C crouch · J punch · K kick · 1 baseball bat · 2 pistol · 3 fists · 4 knife · F enter / exit car · E interact · P pause · M map · N mute · V first-person camera · Drag the right half of the screen (or the mouse) to orbit the camera<br>
-    Hit J / K to fight — everyone fights back. Damage: fists & kicks 10 · knife 15 · bat 20 · pistol 30.<br>
-    Click the minimap or tap MAP to open the full city map.<br>
-    Wanted stars rise only when a crime is witnessed. Money comes only from Mira's jobs.<br>
-    Six jobs, one bay: First Run · Dock Hands · Borrowed Wheels · Quiet Warehouse · Tail Breaker · Last Ferry Out.
+    WASD move · Space jump / brake · J / K fight · F enter car · E interact · P pause · M map · V first-person camera<br>
+    Wanted stars rise only when a crime is witnessed.
   </div>
+</div>
+
+<div id="pause-overlay" class="full-overlay">
+  <h1>PAUSED</h1>
+  <div class="pause-goal-title">YOUR GOAL</div>
+  <div id="pause-fantasy">You are Raka, a framed pier courier.</div>
+  <div id="pause-goal">Finish Mira's 6 jobs to clear your name.</div>
+  <div id="pause-progress">Job 1 of 6</div>
+  <div id="pause-controls"></div>
+  <button id="btn-resume" class="big-btn">RESUME</button>
 </div>
 
 <div id="end-overlay" class="full-overlay">
   <h1 id="end-title">BUSTED</h1>
   <div id="end-text"></div>
   <button id="btn-end-ok" class="big-btn">BACK TO THE BAY</button>
+  <button id="btn-again" class="big-btn alt" style="display:none">PLAY AGAIN</button>
 </div>
 
 <div id="rotate-overlay">

@@ -24,14 +24,14 @@ export const MISSIONS = [
     intro: 'Three crates fell off a boat at the pier. Collect all three on foot and bring yourself back to me.',
     stages: [
       { type: 'collect', label: 'Collect the 3 lost crates on the pier' },
-      { type: 'goto', x: CFG.miraSpot.x, z: CFG.miraSpot.z, label: 'Return to Mira' },
+      { type: 'goto', x: CFG.miraSpot.x, z: CFG.miraSpot.z, label: 'Return to Mira at the pier' },
     ],
   },
   {
     name: 'Borrowed Wheels', reward: CFG.rewards[2],
     intro: 'A teal Gelora GT is parked east, near the palms. Its owner owes the wrong people. Take it to Bengkel Samudra.',
     stages: [
-      { type: 'goto', x: 88, z: -38, label: 'Find the teal Gelora GT' },
+      { type: 'goto', x: 88, z: -38, label: 'Find the teal Gelora GT by the east palms' },
       { type: 'enterStolen', label: 'Get in the Gelora GT' },
       { type: 'driveTo', x: PLACES.garage.x, z: PLACES.garage.z, label: 'Deliver the car to Bengkel Samudra' },
     ],
@@ -40,7 +40,7 @@ export const MISSIONS = [
     name: 'Quiet Warehouse', reward: CFG.rewards[3],
     intro: 'Gudang Pelita No. 9 holds the ledger that clears your name. Crouch past the two guards and reach the office desk.',
     stages: [
-      { type: 'goto', x: 84, z: -50, label: 'Reach Gudang Pelita No. 9' },
+      { type: 'goto', x: 84, z: -50, label: 'Reach Gudang Pelita No. 9 warehouse' },
       { type: 'sneak', x: 84, z: -54, label: 'Crouch past the guards to the ledger desk' },
     ],
   },
@@ -75,10 +75,15 @@ export const M = {
 let sceneRef = null;
 let onObjective = () => {};
 let onDialog = () => {};
+let onGameClear = () => {};
 
 export function missionsInit(scene, hooks) {
   sceneRef = scene;
-  if (hooks) { onObjective = hooks.onObjective || onObjective; onDialog = hooks.onDialog || onDialog; }
+  if (hooks) {
+    onObjective = hooks.onObjective || onObjective;
+    onDialog = hooks.onDialog || onDialog;
+    onGameClear = hooks.onGameClear || onGameClear;
+  }
 }
 
 export function setStealCar(car) { M.stealCar = car; }
@@ -163,6 +168,7 @@ function advanceStage() {
 function completeMission() {
   const def = MISSIONS[M.index];
   S.money += def.reward;
+  S.stats.earned += def.reward;
   M.completed++;
   sfx.missionDone();
   onDialog('mira', 'Mira Santoso', `Job done, Raka. PB$ ${def.reward} - it is yours, clean.`);
@@ -174,6 +180,8 @@ function completeMission() {
   } else {
     M.index = MISSIONS.length - 1;
     onObjective('Free roam - the bay is yours. The ferry story is told.');
+    // the story is won: main.js shows the NAME CLEARED summary screen
+    onGameClear();
   }
 }
 
@@ -205,7 +213,7 @@ export function updateMissions(dt) {
     for (const gNpc of M.guards) {
       if (!p.crouch && dist2d(p.x, p.z, gNpc.x, gNpc.z) < 4.2) {
         p.x = 84; p.z = -48;
-        onObjective('Spotted standing! Crouch (C) and slip past the guards.');
+        onObjective('Crouch now - slip past the guards to the ledger desk.');
         return;
       }
     }
