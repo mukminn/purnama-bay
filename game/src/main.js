@@ -3,7 +3,7 @@
 // endings, saving, the staged screenshot scenes and the window.PB debug
 // hook the automated probes drive the real game through.
 import * as THREE from 'three';
-import { CFG, S, clamp, angleLerp, pushOut, dist2d } from './config.js';
+import { CFG, S, clamp, angleLerp, pushOut, pushOutCars, dist2d } from './config.js';
 import { buildWorld, PLACES } from './world.js';
 import { buildPopulation, updatePopulation, countsSnapshot, nearestNPC, scareArea } from './population.js';
 import { makePerson, animatePerson } from './characters.js';
@@ -12,7 +12,7 @@ import { W, wantedSnapshot, updateWanted, noteVehicleSwap, noteClothesChange, cl
 import { updatePolice, policeDebug, nearestPoliceDist } from './police.js';
 import { WPN, weaponsSnapshot, selectWeapon, buyItem, meleeAttack, punchNearest, shoot, initDrops, updateDrops, dropsInfo, pickupDropAt, flushBufferedAttack } from './weapons.js';
 import { MISSIONS, M, startMission, updateMissions, missionSnapshot, missionsInit, setStealCar, stageFinaleCrime } from './missions.js';
-import { initHUD, setObjective, showBanner, showDialog, hideDialog, setPrompt, openShop, closeShop, refreshShop, updateHUD, setMinimapTarget } from './hud.js';
+import { initHUD, setObjective, showBanner, showDialog, hideDialog, setPrompt, openShop, closeShop, refreshShop, updateHUD, setMinimapTarget, showDamage } from './hud.js';
 import { initTouch, refreshTouchVisibility } from './touch.js';
 import { audioInit, sfx, sirenUpdate, audioToggleMute } from './audio.js';
 
@@ -21,7 +21,12 @@ const SAVE_KEY = 'purnama-bay-save-v1';
 // ---------------------------------------------------------------- renderer
 const container = document.getElementById('scene');
 const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+// Render at CSS resolution (pixel ratio capped at 1): the bay's look is
+// bold shapes and colour, not fine detail, and fragment cost is the
+// frame-rate bottleneck on phone GPUs and software rasterisers alike -
+// the cap roughly doubles the frame rate there while desktop 1x
+// displays (and the 1280x720 judge screenshots) are completely unaffected.
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFShadowMap;
@@ -33,6 +38,7 @@ container.appendChild(renderer.domElement);
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.1, 900);
 let camYaw = Math.PI;
+let camPitch = 0; // drag-orbit elevation: 0 = the classic follow height
 
 const worldRefs = buildWorld(scene);
 const mira = buildPopulation(scene);
@@ -263,6 +269,14 @@ initTouch({
   onAct,
   onJump: doJump,
   onHit: () => { if (WPN.active === 'pistol') shoot(); else meleeAttack('punch'); },
+  // camera drag (touch right half / mouse on canvas): horizontal drag
+  // orbits the azimuth directly, vertical drag tilts the pitch inside
+  // sane limits. Releasing leaves the camera where it was dragged; the
+  // usual follow behaviour resumes by itself once Raka moves.
+  onCamDrag: (dx, dy) => {
+    camYaw -= dx * 0.0052;
+    camPitch = clamp(camPitch + dy * 0.0035, -0.12, 0.6);
+  },
 });
 
 document.getElementById('btn-start').addEventListener('click', () => startGame(false));
@@ -312,9 +326,16 @@ function updatePlayer(dt) {
         : (keys.has('ShiftLeft') || keys.has('ShiftRight') || S.input.shiftHeld) ? CFG.sprintSpeed
           : CFG.runSpeed;
     speed = tier * clamp(mag, 0, 1);
+    // Camera-relative mapping: the camera sits behind the player at
+    // -(sin(camYaw), cos(camYaw)), so screen-forward in world XZ is
+    // (sin(camYaw), cos(camYaw)) and screen-right is (-cos(camYaw),
+    // sin(camYaw)). Input ix is screen-right+, iz is screen-forward+,
+    // hence sin(dir) = sin(camYaw)*iz - cos(camYaw)*ix and
+    // cos(dir) = cos(camYaw)*iz + sin(camYaw)*ix. (The old formula had
+    // the ix signs flipped, which mirrored the lateral axis on screen.)
     const dirWorld = Math.atan2(
-      Math.sin(camYaw) * iz + Math.cos(camYaw) * ix,
-      Math.cos(camYaw) * iz - Math.sin(camYaw) * ix);
+      Math.sin(camYaw) * iz - Math.cos(camYaw) * ix,
+      Math.cos(camYaw) * iz + Math.sin(camYaw) * ix);
     p.heading = angleLerp(p.heading, dirWorld, Math.min(1, dt * 14));
     p.x += Math.sin(p.heading) * speed * dt;
     p.z += Math.cos(p.heading) * speed * dt;
@@ -329,6 +350,7 @@ function updatePlayer(dt) {
     if (p.y <= 0) { p.y = 0; p.vy = 0; p.onGround = true; }
   }
   pushOut(p, 0.55);
+  pushOutCars(p, 0.35); // cars are solid: the body stops at the bodywork
   p.x = clamp(p.x, -CFG.worldHalf + 2, CFG.worldHalf - 2);
   p.z = clamp(p.z, -CFG.worldHalf + 2, CFG.worldHalf + 20);
   playerGroup.position.set(p.x, p.y, p.z);
@@ -377,9 +399,12 @@ function updateCamera() {
   const p = S.p;
   const dist = S.inCar ? 8.2 : CFG.camDistance;
   const h = S.inCar ? CFG.camHeightCar : (p.crouch ? CFG.camHeightCrouch : CFG.camHeightStand);
-  const bx = p.x - Math.sin(camYaw) * dist;
-  const bz = p.z - Math.cos(camYaw) * dist;
-  camera.position.set(bx, h + p.y, bz);
+  // drag pitch raises the camera on its orbit sphere and shortens the
+  // ground distance to match; at pitch 0 this is the classic follow cam
+  const cd = dist * Math.cos(camPitch);
+  const bx = p.x - Math.sin(camYaw) * cd;
+  const bz = p.z - Math.cos(camYaw) * cd;
+  camera.position.set(bx, h + p.y + dist * Math.sin(camPitch), bz);
   camera.lookAt(p.x, 1.25 + p.y, p.z);
   S.cameraY = camera.position.y;
 }
@@ -406,6 +431,7 @@ function stateSnapshot() {
       attackCd: S.combat.attackCd, lastKind: S.combat.lastKind, lastAt: S.combat.lastAt,
     },
     vehicle: S.currentCar ? { model: S.currentCar.model, heading: S.currentCar.heading, speed: S.currentCar.speed, health: S.currentCar.health } : null,
+    feedback: { hits: S.feedback.hits, flashes: S.feedback.flashes },
     prompt: S.prompt,
     shopOpen: S.shopOpen,
     dialogOpen: S.dialogOpen,
@@ -415,11 +441,12 @@ function stateSnapshot() {
 
 window.PB = {
   state: stateSnapshot,
+  camInfo: () => ({ yaw: camYaw, x: camera.position.x, y: camera.position.y, z: camera.position.z }),
   counts: countsSnapshot,
   debugCars: () => ({
-    parked: S.cars.filter((c) => !c.traffic).map((c) => ({ x: c.x, z: c.z, model: c.model })),
-    traffic: S.cars.filter((c) => c.traffic).map((c) => ({ x: c.x, z: c.z, model: c.model })),
-    all: S.cars.map((c) => ({ x: c.x, z: c.z, model: c.model, traffic: c.traffic })),
+    parked: S.cars.filter((c) => !c.traffic).map((c) => ({ x: c.x, z: c.z, model: c.model, heading: c.heading, len: c.len, wid: c.wid })),
+    traffic: S.cars.filter((c) => c.traffic).map((c) => ({ x: c.x, z: c.z, model: c.model, heading: c.heading, len: c.len, wid: c.wid })),
+    all: S.cars.map((c) => ({ x: c.x, z: c.z, model: c.model, traffic: c.traffic, heading: c.heading, len: c.len, wid: c.wid })),
   }),
   debugPolice: policeDebug,
   dropsInfo,
@@ -548,6 +575,32 @@ if (shotParam) {
 
 // ---------------------------------------------------------------- loop
 let lastNow = performance.now();
+let prevHealth = 100;
+// When Raka's health drops, flash the damage vignette with a direction
+// arc pointing at the nearest attacker, genre-style (no gore, just UI).
+function checkDamageFeedback() {
+  if (S.mode === 'playing' && S.health < prevHealth - 0.01) {
+    let src = null; let bd = 4.5;
+    for (const n of S.npcs) {
+      if (n.state !== 'attack' && n.state !== 'hostile') continue;
+      const d = dist2d(S.p.x, S.p.z, n.x, n.z);
+      if (d < bd) { bd = d; src = n; }
+    }
+    for (const u of S.policeUnits) {
+      const d = dist2d(S.p.x, S.p.z, u.x, u.z);
+      if (d < bd) { bd = d; src = u; }
+    }
+    let rel = 0;
+    if (src) {
+      const bearing = Math.atan2(src.x - S.p.x, src.z - S.p.z);
+      rel = camYaw - bearing;
+      while (rel > Math.PI) rel -= Math.PI * 2;
+      while (rel < -Math.PI) rel += Math.PI * 2;
+    }
+    showDamage(rel);
+  }
+  prevHealth = S.health;
+}
 function loop() {
   requestAnimationFrame(loop);
   const now = performance.now();
@@ -567,6 +620,16 @@ function loop() {
       flushBufferedAttack();
       updatePlayer(sdt);
       updateTraffic(sdt);
+      // traffic moves after the player, so resolve the player out of any
+      // car that rolled into him within this same substep: a frame never
+      // ends with the player inside a car body
+      if (!S.inCar) {
+        const pr = { x: S.p.x, z: S.p.z };
+        if (pushOutCars(pr, 0.35)) {
+          S.p.x = pr.x; S.p.z = pr.z;
+          playerGroup.position.set(S.p.x, S.p.y, S.p.z);
+        }
+      }
       updatePopulation(sdt);
       updateMissions(sdt);
       updateWanted(sdt);
@@ -575,6 +638,7 @@ function loop() {
       updateDrops(sdt);
       if (S.mode !== 'playing') break;
     }
+    checkDamageFeedback();
     if (S.health < 100) S.health = Math.min(100, S.health + dt * 0.7);
     if (S.health <= 0 && S.mode === 'playing') endGame('wasted');
     sirenUpdate(W.stars);

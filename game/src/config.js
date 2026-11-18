@@ -87,6 +87,9 @@ export const S = {
     attackT: 0, attackKind: '', attackCd: 0,
     lastKind: '', lastAt: -10,
   },
+  // genre-style feedback counters: hit-marker flashes for the player's own
+  // landed attacks, red vignette flashes when the player takes damage
+  feedback: { hits: 0, flashes: 0 },
   stats: { shotsFired: 0, crimesSeen: 0, crimesUnseen: 0 },
 };
 
@@ -109,6 +112,37 @@ export function pointBlocked(x, z, pad) {
     if (x > c.minX - pad && x < c.maxX + pad && z > c.minZ - pad && z < c.maxZ + pad) return c;
   }
   return null;
+}
+
+// Resolve a position out of every car's oriented bounding box. Each car
+// record carries len/wid (metres); the box is expanded by `radius` on all
+// sides, and the position is pushed out along the shallower penetration
+// axis in the car's local frame. Returns true when a car was hit. `ignore`
+// skips one record (the car being driven). This is the single collision
+// representation used for the walking player, NPCs, police and the driven
+// car, so nothing on foot or on wheels can ever end a frame inside a car.
+export function pushOutCars(p, radius, ignore) {
+  let hit = false;
+  for (const c of S.cars) {
+    if (c === ignore || c.dead) continue;
+    const hl = (c.len || 4.4) / 2 + radius;
+    const hw = (c.wid || 1.85) / 2 + radius;
+    const dx = p.x - c.x; const dz = p.z - c.z;
+    const fx = Math.sin(c.heading); const fz = Math.cos(c.heading); // forward
+    const rx = Math.cos(c.heading); const rz = -Math.sin(c.heading); // right
+    const lf = dx * fx + dz * fz;
+    const lr = dx * rx + dz * rz;
+    if (Math.abs(lf) >= hl || Math.abs(lr) >= hw) continue;
+    const penF = hl - Math.abs(lf);
+    const penR = hw - Math.abs(lr);
+    let nlf = lf; let nlr = lr;
+    if (penR < penF) nlr = (lr < 0 ? -hw : hw);
+    else nlf = (lf < 0 ? -hl : hl);
+    p.x = c.x + fx * nlf + rx * nlr;
+    p.z = c.z + fz * nlf + rz * nlr;
+    hit = true;
+  }
+  return hit;
 }
 
 // Resolve a position out of any building footprint it sits inside.

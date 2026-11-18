@@ -2,7 +2,7 @@
 // their doors, dockworkers on the pier, children at play, syndicate thugs,
 // and the bay's dogs and cats. Counts are the game's census targets.
 import * as THREE from 'three';
-import { S, CFG, dist2d, pushOut, clamp } from './config.js';
+import { S, CFG, dist2d, pushOut, pushOutCars, clamp } from './config.js';
 import { makePerson, makePersonRecord, makeAnimal, animatePerson, animateAnimal } from './characters.js';
 import { PLACES } from './world.js';
 
@@ -169,6 +169,7 @@ export function updatePopulation(dt) {
     }
     const probe = { x: n.x, z: n.z };
     pushOut(probe, 0.55);
+    pushOutCars(probe, 0.35); // pedestrians never clip through cars either
     n.x = probe.x; n.z = probe.z;
     n.x = clamp(n.x, -CFG.worldHalf + 2, CFG.worldHalf - 2);
     n.z = clamp(n.z, -CFG.worldHalf + 2, CFG.worldHalf + 22);

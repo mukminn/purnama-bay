@@ -2,8 +2,11 @@
 // Parked cars sit empty and can be taken; traffic cars carry a driver and
 // never offer the ENTER prompt. One physics step drives the player's car.
 import * as THREE from 'three';
-import { S, CFG, dist2d, pushOut, clamp } from './config.js';
+import { S, CFG, dist2d, pushOut, pushOutCars, clamp } from './config.js';
 import { sfx } from './audio.js';
+import { mergeColored, coloredLambert } from './merge.js';
+
+const coloredBasic = new THREE.MeshBasicMaterial({ vertexColors: true });
 
 export const MODELS = {
   'Pijar City': { len: 3.6, wid: 1.7, hgt: 0.62, cabin: 0.5, maxSpeed: 17, accel: 11, color: 0xd96f32 },
@@ -12,51 +15,85 @@ export const MODELS = {
   'Tangguh Pickup': { len: 4.8, wid: 1.95, hgt: 0.72, cabin: 0.55, maxSpeed: 18, accel: 10.5, color: 0x3f7d4e },
   'Patrol Unit': { len: 4.5, wid: 1.85, hgt: 0.6, cabin: 0.5, maxSpeed: 21, accel: 13, color: 0xf0f0f0 },
 };
-const PAINTS = [0xd96f32, 0x2e5f8a, 0xc9973f, 0x3f7d4e, 0x7a4a8c, 0xb8452e, 0xe8e3d5, 0x31435c];
+// Dusk-coast metallic paints: bold but one family - sunset orange, deep
+// sea teal, magenta dusk, neon cyan, warm gold, plum, coral, pearl.
+const PAINTS = [0xe86a2a, 0x14666e, 0xd94f70, 0x1fa8b8, 0xd9a441, 0x6a4a9e, 0xe8e0cc, 0x274b63];
+
+// Extrude a car's side profile (length x height) across its width with a
+// small bevel, so hoods, windscreens, roofs and trunks slope and the
+// corners read rounded instead of stacked-box. The shape's +X is the
+// car's nose; after the rotation the nose faces +Z (the heading axis).
+function profileGeometry(points, width) {
+  const shape = new THREE.Shape();
+  shape.moveTo(points[0][0], points[0][1]);
+  for (let i = 1; i < points.length; i++) shape.lineTo(points[i][0], points[i][1]);
+  shape.closePath();
+  const depth = Math.max(0.4, width - 0.14);
+  const geo = new THREE.ExtrudeGeometry(shape, {
+    depth, bevelEnabled: true, bevelThickness: 0.05, bevelSize: 0.05, bevelSegments: 2, steps: 1,
+  });
+  geo.rotateY(-Math.PI / 2);
+  geo.translate(depth / 2, 0, 0);
+  return geo;
+}
 
 function buildCarMesh(model, colorOverride) {
   const spec = MODELS[model];
+  const L = spec.len; const Wd = spec.wid;
+  const paintColor = colorOverride !== undefined ? colorOverride : spec.color;
   const g = new THREE.Group();
-  const paint = new THREE.MeshLambertMaterial({ color: colorOverride !== undefined ? colorOverride : spec.color });
-  const dark = new THREE.MeshLambertMaterial({ color: 0x1c2126 });
-  const glass = new THREE.MeshLambertMaterial({ color: 0x9fd4e8 });
-  const body = new THREE.Mesh(new THREE.BoxGeometry(spec.wid, spec.hgt, spec.len), paint);
-  body.position.y = 0.35 + spec.hgt / 2;
-  body.castShadow = true;
-  g.add(body);
-  if (model === 'Tangguh Pickup') {
-    const cab = new THREE.Mesh(new THREE.BoxGeometry(spec.wid * 0.92, spec.cabin, spec.len * 0.36), paint);
-    cab.position.set(0, 0.35 + spec.hgt + spec.cabin / 2, spec.len * 0.22);
-    cab.castShadow = true;
-    g.add(cab);
-    const win = new THREE.Mesh(new THREE.BoxGeometry(spec.wid * 0.94, spec.cabin * 0.55, spec.len * 0.3), glass);
-    win.position.set(0, 0.35 + spec.hgt + spec.cabin * 0.62, spec.len * 0.22);
-    g.add(win);
-  } else {
-    const cab = new THREE.Mesh(new THREE.BoxGeometry(spec.wid * 0.86, spec.cabin, spec.len * 0.46), glass);
-    cab.position.set(0, 0.35 + spec.hgt + spec.cabin / 2, -spec.len * 0.04);
-    cab.castShadow = true;
-    g.add(cab);
+  const pickup = model === 'Tangguh Pickup';
+  // side profile: nose low and sloped, windscreen rising to a flat roof,
+  // short sloped tail. The pickup gets a forward cab and an open bed.
+  const bodyPts = pickup
+    ? [[-L / 2, 0.30], [L / 2, 0.30], [L / 2, 0.78], [L * 0.34, 0.86], [L * 0.26, 1.42], [L * 0.02, 1.46], [-L * 0.06, 0.92], [-L / 2, 0.90]]
+    : [[-L / 2, 0.30], [L / 2, 0.30], [L / 2, 0.68], [L * 0.30, 0.82], [L * 0.10, 1.30], [-L * 0.16, 1.34], [-L * 0.30, 0.86], [-L / 2, 0.82]];
+  // The whole car is four draw calls: metallic paint (profile + roof
+  // panel merged), the glass canopy, one merged dark assembly (bumpers,
+  // wheels, arch discs, bed, stripe) and one merged lamp strip.
+  const roofLen = pickup ? L * 0.17 : L * 0.26;
+  const roofZ = pickup ? L * 0.10 : -L * 0.025;
+  const paintMesh = new THREE.Mesh(mergeColored([
+    { geo: profileGeometry(bodyPts, Wd), color: paintColor },
+    { geo: new THREE.BoxGeometry(Wd * 0.8, 0.055, roofLen), color: paintColor, y: pickup ? 1.475 : 1.365, z: roofZ },
+  ]), new THREE.MeshPhongMaterial({ vertexColors: true, shininess: 70, specular: 0x8fa8bf }));
+  paintMesh.castShadow = true;
+  g.add(paintMesh);
+  // glasshouse: one narrower sloped band fused into the body profile -
+  // windscreen, side glass and rear screen read as a single canopy
+  const glassPts = pickup
+    ? [[L * 0.245, 0.90], [L * 0.175, 1.38], [L * 0.035, 1.41], [-L * 0.045, 0.92]]
+    : [[L * 0.265, 0.84], [L * 0.095, 1.265], [-L * 0.145, 1.30], [-L * 0.265, 0.87]];
+  const canopy = new THREE.Mesh(profileGeometry(glassPts, Wd * 0.82),
+    new THREE.MeshPhongMaterial({ color: 0x16283a, shininess: 130, specular: 0xcfe8ff }));
+  g.add(canopy);
+  const DARK = 0x14181d;
+  const darkParts = [
+    { geo: new THREE.BoxGeometry(Wd * 0.96, 0.16, 0.14), color: DARK, y: 0.38, z: L / 2 + 0.03 },
+    { geo: new THREE.BoxGeometry(Wd * 0.96, 0.16, 0.14), color: DARK, y: 0.38, z: -L / 2 - 0.03 },
+  ];
+  if (pickup) darkParts.push({ geo: new THREE.BoxGeometry(Wd * 0.94, 0.34, L * 0.34), color: DARK, y: 0.78, z: -L * 0.30 });
+  if (model === 'Patrol Unit') darkParts.push({ geo: new THREE.BoxGeometry(Wd + 0.03, 0.18, L * 0.62), color: DARK, y: 0.58 });
+  // wheels pushed out to the body's edge, dark arch disc behind each
+  for (const [wx, wz] of [[-Wd / 2, L * 0.32], [Wd / 2, L * 0.32], [-Wd / 2, -L * 0.32], [Wd / 2, -L * 0.32]]) {
+    darkParts.push({ geo: new THREE.CylinderGeometry(0.35, 0.35, 0.26, 14), color: DARK, x: wx, y: 0.35, z: wz, rz: Math.PI / 2 });
+    darkParts.push({ geo: new THREE.CircleGeometry(0.47, 14, 0, Math.PI), color: DARK, x: wx + (wx < 0 ? -0.045 : 0.045), y: 0.35, z: wz, ry: wx < 0 ? -Math.PI / 2 : Math.PI / 2 });
   }
+  g.add(new THREE.Mesh(mergeColored(darkParts), coloredLambert));
+  const lampParts = [];
+  for (const sx of [-1, 1]) {
+    lampParts.push({ geo: new THREE.BoxGeometry(0.34, 0.11, 0.06), color: 0xffe9b0, x: sx * Wd * 0.32, y: 0.62, z: L / 2 + 0.055 });
+    lampParts.push({ geo: new THREE.BoxGeometry(0.36, 0.10, 0.06), color: 0xd92b3a, x: sx * Wd * 0.32, y: 0.66, z: -L / 2 - 0.055 });
+  }
+  g.add(new THREE.Mesh(mergeColored(lampParts), coloredBasic));
   if (model === 'Patrol Unit') {
-    const stripe = new THREE.Mesh(new THREE.BoxGeometry(spec.wid + 0.02, 0.2, spec.len * 0.7), dark);
-    stripe.position.y = 0.62;
-    g.add(stripe);
-    const bar = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.14, 0.4),
+    const bar = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.13, 0.38),
       new THREE.MeshBasicMaterial({ color: 0xff4444 }));
-    bar.position.set(0, 0.35 + spec.hgt + spec.cabin + 0.08, -spec.len * 0.04);
+    bar.position.set(0, 1.47, -L * 0.03);
     g.add(bar);
     g.userData.lightBar = bar;
   }
-  const wheelGeo = new THREE.CylinderGeometry(0.34, 0.34, 0.24, 10);
-  const wheels = [];
-  for (const [wx, wz] of [[-spec.wid / 2, spec.len * 0.32], [spec.wid / 2, spec.len * 0.32], [-spec.wid / 2, -spec.len * 0.32], [spec.wid / 2, -spec.len * 0.32]]) {
-    const w = new THREE.Mesh(wheelGeo, dark);
-    w.rotation.z = Math.PI / 2;
-    w.position.set(wx, 0.34, wz);
-    g.add(w); wheels.push(w);
-  }
-  g.userData.wheels = wheels;
+  g.userData.wheels = []; // wheels are merged into the dark assembly now
   return g;
 }
 
@@ -67,6 +104,7 @@ function makeCarRecord(scene, model, x, z, heading, traffic, colorOverride) {
   scene.add(group);
   const rec = {
     model, group, x, z, heading,
+    len: MODELS[model].len, wid: MODELS[model].wid,
     speed: 0, traffic: !!traffic,
     hasDriver: !!traffic,
     health: 100, dead: false,
@@ -155,7 +193,11 @@ export function driveStep(car, dt, throttle, steer, brake) {
   car.z = clamp(car.z, -CFG.worldHalf + 2, CFG.worldHalf + 20);
   const probe = { x: car.x, z: car.z };
   pushOut(probe, 1.5);
-  if (Math.abs(probe.x - car.x) > 0.01 || Math.abs(probe.z - car.z) > 0.01) {
+  // solid against other cars: the driven car is resolved out of every
+  // other car's box (its own bulk counts as 0.45 of its length), so it
+  // crumples to a stop instead of ghosting through parked or moving cars
+  const hitCar = pushOutCars(probe, spec.len * 0.45, car);
+  if (hitCar || Math.abs(probe.x - car.x) > 0.01 || Math.abs(probe.z - car.z) > 0.01) {
     car.x = probe.x; car.z = probe.z;
     if (Math.abs(car.speed) > 7) damageCar(car, (Math.abs(car.speed) - 6) * 1.4);
     car.speed *= 0.35;

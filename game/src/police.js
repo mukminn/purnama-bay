@@ -3,7 +3,7 @@
 // level. They hunt the player's real position but only "see" inside the
 // wanted model's sight radius, and they stand down when the stars are gone.
 import * as THREE from 'three';
-import { S, CFG, dist2d, pushOut, clamp } from './config.js';
+import { S, CFG, dist2d, pushOut, pushOutCars, clamp } from './config.js';
 import { makePerson, animatePerson } from './characters.js';
 import { W } from './wanted.js';
 
@@ -70,6 +70,7 @@ export function updatePolice(scene, dt) {
     }
     const probe = { x: u.x, z: u.z };
     pushOut(probe, 0.55);
+    pushOutCars(probe, 0.35); // foot units route around cars, not through
     u.x = probe.x; u.z = probe.z;
     u.group.position.set(u.x, 0, u.z);
     u.group.rotation.y = u.heading;

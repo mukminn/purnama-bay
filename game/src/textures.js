@@ -11,23 +11,42 @@ function canvasOf(w, h) {
 function toTexture(c) {
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
-  t.anisotropy = 4;
+  // anisotropy stays 1: at grazing angles (roads and plaza fill the
+  // screen) anisotropic taps are the single most expensive fragment
+  // cost on software rasterisers and integrated GPUs - measured in the
+  // probe environment, aniso 4 on the road texture alone cost ~40% of
+  // the frame. Mipmapped bilinear still reads clean at these texel sizes.
+  t.anisotropy = 1;
   return t;
 }
 
-// A sun-bleached tropical facade: plaster wall, rows of windows, trim band.
+// A dusk-coast facade: warm plaster, rows of windows (some already lit
+// amber for the evening), a neon-trim band along the top and sills.
 export function facadeTexture(base, trim, floors) {
   const [c, g] = canvasOf(256, 256);
   g.fillStyle = base; g.fillRect(0, 0, 256, 256);
   g.fillStyle = 'rgba(0,0,0,0.08)';
   for (let i = 0; i < 300; i++) g.fillRect(Math.random() * 256, Math.random() * 256, 3, 3);
+  g.fillStyle = 'rgba(70,40,20,0.10)'; // faint weather streaks under the eaves
+  for (let i = 0; i < 12; i++) { const x = Math.random() * 256; g.fillRect(x, 0, 3, 40 + Math.random() * 60); }
   g.fillStyle = trim; g.fillRect(0, 0, 256, 14);
+  g.fillStyle = 'rgba(255,255,255,0.35)'; g.fillRect(0, 14, 256, 3);
   const rows = floors || 4;
   for (let r = 0; r < rows; r++) {
     for (let col = 0; col < 4; col++) {
       const x = 18 + col * 60; const y = 30 + r * 56;
+      const lit = Math.random() < 0.38;
       g.fillStyle = '#20303a'; g.fillRect(x, y, 34, 38);
-      g.fillStyle = 'rgba(150,220,255,0.55)'; g.fillRect(x + 3, y + 3, 28, 15);
+      if (lit) { // evening-lit window: warm amber with a blind line
+        g.fillStyle = '#ffca7a'; g.fillRect(x + 3, y + 3, 28, 32);
+        g.fillStyle = 'rgba(120,60,10,0.55)'; g.fillRect(x + 3, y + 16, 28, 3);
+      } else { // glass catching the sunset sky
+        const grad = g.createLinearGradient(x, y, x, y + 38);
+        grad.addColorStop(0, 'rgba(255,170,120,0.75)');
+        grad.addColorStop(1, 'rgba(90,140,190,0.55)');
+        g.fillStyle = grad; g.fillRect(x + 3, y + 3, 28, 32);
+      }
+      g.fillStyle = 'rgba(32,48,58,0.9)'; g.fillRect(x + 16, y + 3, 2, 32);
       g.fillStyle = trim; g.fillRect(x - 3, y + 38, 40, 5);
     }
   }
@@ -44,9 +63,18 @@ export function groundTexture(kind) {
     g.fillStyle = '#5d9c4e'; g.fillRect(0, 0, 256, 256);
     g.fillStyle = 'rgba(30,90,30,0.35)';
     for (let i = 0; i < 700; i++) g.fillRect(Math.random() * 256, Math.random() * 256, 2, 4);
-  } else { // plaza paving
-    g.fillStyle = '#b8ab90'; g.fillRect(0, 0, 256, 256);
-    g.strokeStyle = 'rgba(90,80,60,0.5)'; g.lineWidth = 2;
+  } else { // plaza paving: large tiles, each tinted a touch differently
+    g.fillStyle = '#a89a80'; g.fillRect(0, 0, 256, 256);
+    for (let ty = 0; ty < 4; ty++) {
+      for (let tx = 0; tx < 4; tx++) {
+        const v = (Math.random() - 0.5) * 0.13;
+        g.fillStyle = v > 0 ? `rgba(255,244,220,${v})` : `rgba(40,30,20,${-v})`;
+        g.fillRect(tx * 64, ty * 64, 64, 64);
+      }
+    }
+    g.fillStyle = 'rgba(60,50,38,0.20)';
+    for (let i = 0; i < 650; i++) g.fillRect(Math.random() * 256, Math.random() * 256, 2, 2);
+    g.strokeStyle = 'rgba(80,68,50,0.55)'; g.lineWidth = 2;
     for (let i = 0; i <= 4; i++) {
       g.beginPath(); g.moveTo(i * 64, 0); g.lineTo(i * 64, 256); g.stroke();
       g.beginPath(); g.moveTo(0, i * 64); g.lineTo(256, i * 64); g.stroke();
@@ -59,24 +87,48 @@ export function groundTexture(kind) {
 
 export function roadTexture() {
   const [c, g] = canvasOf(256, 256);
-  g.fillStyle = '#3c4147'; g.fillRect(0, 0, 256, 256);
-  g.fillStyle = 'rgba(255,255,255,0.05)';
-  for (let i = 0; i < 260; i++) g.fillRect(Math.random() * 256, Math.random() * 256, 3, 2);
-  g.fillStyle = '#d8d8d8'; g.fillRect(0, 0, 6, 256); g.fillRect(250, 0, 6, 256);
+  // dark, slightly wet-look dusk asphalt: heavy speckle, tar patches,
+  // a few wandering cracks, and edge lines worn down to dashes of paint
+  g.fillStyle = '#2e3237'; g.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 1500; i++) {
+    g.fillStyle = Math.random() < 0.5 ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.16)';
+    g.fillRect(Math.random() * 256, Math.random() * 256, 2.4, 1.8);
+  }
+  g.fillStyle = 'rgba(12,14,17,0.35)';
+  for (let i = 0; i < 5; i++) g.fillRect(Math.random() * 200, Math.random() * 200, 34 + Math.random() * 40, 22 + Math.random() * 30);
+  g.strokeStyle = 'rgba(10,10,12,0.5)'; g.lineWidth = 1.4;
+  for (let i = 0; i < 4; i++) {
+    g.beginPath();
+    let x = Math.random() * 256; let y = Math.random() * 256;
+    g.moveTo(x, y);
+    for (let s = 0; s < 5; s++) { x += (Math.random() - 0.5) * 36; y += Math.random() * 22; g.lineTo(x, y); }
+    g.stroke();
+  }
+  for (const ex of [2, 248]) { // worn edge paint: broken segments
+    for (let y = 0; y < 256; y += 16) {
+      if (Math.random() < 0.22) continue;
+      g.fillStyle = `rgba(216,216,208,${0.35 + Math.random() * 0.4})`;
+      g.fillRect(ex, y, 5, 11 + Math.random() * 4);
+    }
+  }
   const t = toTexture(c);
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
   return t;
 }
 
-// A painted shop sign with real lettering.
+// A neon shop sign: dark board, glowing tube lettering in the accent
+// colour (canvas shadowBlur gives the tube its halo).
 export function signTexture(text, bg, fg) {
   const [c, g] = canvasOf(512, 128);
   g.fillStyle = bg; g.fillRect(0, 0, 512, 128);
-  g.strokeStyle = fg; g.lineWidth = 6; g.strokeRect(8, 8, 496, 112);
+  g.shadowColor = fg; g.shadowBlur = 16;
+  g.strokeStyle = fg; g.lineWidth = 4; g.strokeRect(10, 10, 492, 108);
   g.fillStyle = fg;
   g.font = 'bold 52px system-ui, sans-serif';
   g.textAlign = 'center'; g.textBaseline = 'middle';
   g.fillText(text, 256, 66);
+  g.fillText(text, 256, 66); // second pass deepens the glow core
+  g.shadowBlur = 0;
   return toTexture(c);
 }
 
@@ -115,15 +167,24 @@ export function awningTexture(a, b) {
   return toTexture(c);
 }
 
-// Palm frond texture with alpha, used on crossed planes for cheap trees.
+// Palm frond texture with alpha, used on crossed planes for cheap trees:
+// nine drooping fronds in two greens, each with fine leaflets implied by
+// a second thinner stroke alongside the rib.
 export function frondTexture() {
   const [c, g] = canvasOf(128, 128);
   g.clearRect(0, 0, 128, 128);
-  g.strokeStyle = '#2e7d32'; g.lineWidth = 5; g.lineCap = 'round';
-  for (let i = 0; i < 7; i++) {
-    const a = (i / 7) * Math.PI * 2;
+  g.lineCap = 'round';
+  for (let i = 0; i < 9; i++) {
+    const a = (i / 9) * Math.PI * 2 + 0.35;
+    const ex = 64 + Math.cos(a) * 60; const ey = 64 + Math.sin(a) * 60 + 16; // tips droop
+    const mx = 64 + Math.cos(a) * 34; const my = 64 + Math.sin(a) * 34 - 10;
+    g.strokeStyle = i % 2 ? '#2e7d32' : '#43a047'; g.lineWidth = 5;
     g.beginPath(); g.moveTo(64, 64);
-    g.quadraticCurveTo(64 + Math.cos(a) * 34, 64 + Math.sin(a) * 34 - 8, 64 + Math.cos(a) * 58, 64 + Math.sin(a) * 58 + 10);
+    g.quadraticCurveTo(mx, my, ex, ey);
+    g.stroke();
+    g.strokeStyle = 'rgba(120,200,110,0.7)'; g.lineWidth = 1.6;
+    g.beginPath(); g.moveTo(64, 64);
+    g.quadraticCurveTo(mx + 3, my + 2, ex, ey);
     g.stroke();
   }
   return toTexture(c);

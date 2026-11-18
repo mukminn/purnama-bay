@@ -14,7 +14,7 @@
   /* ---------- HUD ---------- */
   #hud { position: fixed; inset: 0; pointer-events: none; display: none; }
   #objective { position: fixed; top: 12px; left: 12px; max-width: 300px; padding: 9px 12px; font-size: 14px; line-height: 1.35; color: #ffe9a8; }
-  #minimap-wrap { position: fixed; top: 12px; right: 12px; width: 148px; height: 148px; border-radius: 50%; overflow: hidden; border: 2px solid rgba(255,255,255,0.35); background: #79a85b; }
+  #minimap-wrap { position: fixed; top: 12px; right: 12px; width: 148px; height: 148px; border-radius: 50%; overflow: hidden; border: 2px solid rgba(255,255,255,0.35); background: #8a8f66; }
   #minimap { width: 148px; height: 148px; display: block; }
   #status-box { position: fixed; top: 108px; left: 12px; width: 196px; padding: 9px 12px; }
   #hud-money { font-size: 19px; font-weight: 700; color: #ffd34d; }
@@ -39,8 +39,8 @@
   #shop-msg { min-height: 20px; color: #ffe9a8; margin-top: 10px; font-size: 14px; }
   #shop-close { margin-top: 8px; width: 100%; padding: 9px; background: #31435c; color: #fff; border: 0; border-radius: 7px; font-weight: 700; cursor: pointer; }
   /* ---------- menu / end ---------- */
-  .full-overlay { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; background: linear-gradient(180deg, rgba(13,30,44,0.55), rgba(13,22,32,0.88)); z-index: 40; padding: 20px; }
-  #menu h1 { font-size: clamp(38px, 8vw, 74px); letter-spacing: 3px; color: #ffd34d; text-shadow: 0 4px 0 #b8452e, 0 8px 26px rgba(0,0,0,0.6); }
+  .full-overlay { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; background: linear-gradient(180deg, rgba(44,40,94,0.50), rgba(20,14,34,0.88)); z-index: 40; padding: 20px; }
+  #menu h1 { font-size: clamp(38px, 8vw, 74px); letter-spacing: 3px; color: #ffd34d; text-shadow: 0 4px 0 #d94f70, 0 8px 26px rgba(0,0,0,0.6); }
   #menu .tag { font-size: clamp(14px, 2.4vw, 19px); color: #ffe9a8; margin: 10px 0 22px; max-width: 640px; line-height: 1.5; }
   .big-btn { padding: 14px 44px; font-size: 19px; font-weight: 800; letter-spacing: 1px; background: #ffd34d; color: #0d1620; border: 0; border-radius: 10px; cursor: pointer; margin: 5px; box-shadow: 0 5px 0 #b8860b; }
   .big-btn.alt { background: #0f7d8c; color: #fff; box-shadow: 0 5px 0 #0a4f59; }
@@ -53,15 +53,20 @@
   #rotate-overlay .big { font-size: 27px; font-weight: 800; letter-spacing: 2px; color: #ffd34d; }
   #rotate-overlay .small { margin-top: 10px; color: #bcd8e8; font-size: 15px; line-height: 1.5; }
   @media (orientation: portrait) { #rotate-overlay { display: flex; } }
+  /* ---------- combat feedback (genre-style, no gore) ---------- */
+  #dmg-vignette { position: fixed; inset: 0; pointer-events: none; z-index: 15; opacity: 0; background: radial-gradient(ellipse at center, rgba(200,20,20,0) 52%, rgba(200,20,20,0.42) 100%); }
+  #dmg-dir { position: fixed; left: 50%; top: 50%; width: 150px; height: 150px; pointer-events: none; z-index: 15; opacity: 0; transform: translate(-50%, -50%); }
+  #dmg-dir-arc { position: absolute; left: 50%; top: 2px; width: 52px; height: 12px; margin-left: -26px; border-radius: 8px; background: rgba(255,45,45,0.9); box-shadow: 0 0 10px rgba(255,45,45,0.8); }
+  #hitmarker { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 15; opacity: 0; color: #fff; font-size: 21px; font-weight: 800; text-shadow: 0 0 6px rgba(0,0,0,0.7); }
   /* ---------- touch ---------- */
   #touch-ui { position: fixed; inset: 0; display: none; pointer-events: none; z-index: 20; }
-  #joy-base { position: fixed; left: 22px; bottom: 22px; width: 124px; height: 124px; border-radius: 50%; background: rgba(255,255,255,0.10); border: 2px solid rgba(255,255,255,0.3); pointer-events: auto; }
-  #joy-knob { position: absolute; left: 50%; top: 50%; width: 54px; height: 54px; margin: -27px 0 0 -27px; border-radius: 50%; background: rgba(255,211,77,0.75); }
-  .tbtn { position: fixed; width: 64px; height: 64px; border-radius: 50%; background: rgba(13,22,32,0.72); border: 2px solid rgba(255,211,77,0.55); color: #ffe9a8; font-weight: 800; font-size: 12.5px; display: flex; align-items: center; justify-content: center; pointer-events: auto; user-select: none; -webkit-user-select: none; }
-  #btn-act { right: 24px; bottom: 24px; }
-  #btn-brake { right: 102px; bottom: 24px; display: none; }
-  #btn-jump { right: 24px; bottom: 102px; }
-  #btn-hit { right: 102px; bottom: 102px; }
+  #joy-base { position: fixed; left: 18px; bottom: 18px; width: 96px; height: 96px; border-radius: 50%; background: rgba(255,255,255,0.10); border: 2px solid rgba(255,255,255,0.3); pointer-events: auto; }
+  #joy-knob { position: absolute; left: 50%; top: 50%; width: 44px; height: 44px; margin: -22px 0 0 -22px; border-radius: 50%; background: rgba(255,211,77,0.75); }
+  .tbtn { position: fixed; width: 52px; height: 52px; border-radius: 50%; background: rgba(13,22,32,0.72); border: 2px solid rgba(255,211,77,0.55); color: #ffe9a8; font-weight: 800; font-size: 11px; display: flex; align-items: center; justify-content: center; pointer-events: auto; user-select: none; -webkit-user-select: none; }
+  #btn-act { right: 20px; bottom: 20px; }
+  #btn-brake { right: 82px; bottom: 20px; display: none; }
+  #btn-jump { right: 20px; bottom: 82px; }
+  #btn-hit { right: 82px; bottom: 82px; }
 </style>
 <script type="importmap">
 { "imports": { "three": "./vendor/three.module.min.js" } }
@@ -102,6 +107,10 @@
   <button id="shop-close">Leave shop</button>
 </div>
 
+<div id="dmg-vignette"></div>
+<div id="dmg-dir"><div id="dmg-dir-arc"></div></div>
+<div id="hitmarker">&#10005;</div>
+
 <div id="touch-ui">
   <div id="joy-base"><div id="joy-knob"></div></div>
   <div id="btn-act" class="tbtn">ACT</div>
@@ -118,7 +127,7 @@
     <button id="btn-continue" class="big-btn alt" style="display:none">CONTINUE</button>
   </div>
   <div class="controls">
-    WASD move · Alt walk · Shift sprint · Space jump / brake · C crouch · J punch · K kick · 1 baton · 2 pistol · 3 fists · F enter / exit car · E interact · P pause · M mute<br>
+    WASD move · Alt walk · Shift sprint · Space jump / brake · C crouch · J punch · K kick · 1 baton · 2 pistol · 3 fists · F enter / exit car · E interact · P pause · M mute · Drag the right half of the screen (or the mouse) to orbit the camera<br>
     Wanted stars rise only when a crime is witnessed. Money comes only from Mira's jobs.<br>
     Six jobs, one bay: First Run · Dock Hands · Borrowed Wheels · Quiet Warehouse · Tail Breaker · Last Ferry Out.
   </div>

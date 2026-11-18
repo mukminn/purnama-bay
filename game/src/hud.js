@@ -8,6 +8,24 @@ import { W } from './wanted.js';
 const el = {};
 let minimapTarget = null;
 let lastMoney = -1; let lastHealth = -1; let lastStars = -1; let lastWeapon = '';
+// genre-style combat feedback state (DOM overlays declared in index.html)
+let dmgAt = -1e9; let dmgBearing = 0; let hitAt = -1e9;
+
+// Red edge vignette + a direction arc showing where the blow came from.
+// `bearing` is the attacker's direction relative to the camera view
+// (0 = ahead on screen, positive = clockwise to the right).
+export function showDamage(bearing) {
+  dmgAt = performance.now();
+  dmgBearing = bearing || 0;
+  S.feedback.flashes++;
+  if (el['dmg-dir']) el['dmg-dir'].style.transform = `translate(-50%, -50%) rotate(${dmgBearing}rad)`;
+}
+
+// A brief centre-screen marker when the player's own attack connects.
+export function showHitMarker() {
+  hitAt = performance.now();
+  S.feedback.hits++;
+}
 
 export function setMinimapTarget(t) { minimapTarget = t; }
 
@@ -15,7 +33,8 @@ export function initHUD(hooks) {
   for (const id of ['objective', 'status-box', 'minimap', 'minimap-wrap', 'prompt',
     'hud-money', 'hud-health-fill', 'hud-stars', 'hud-weapon',
     'dialog', 'dialog-name', 'dialog-text', 'dialog-portrait', 'dialog-next',
-    'shop', 'shop-msg', 'shop-money', 'banner']) {
+    'shop', 'shop-msg', 'shop-money', 'banner',
+    'dmg-vignette', 'dmg-dir', 'hitmarker']) {
     el[id] = document.getElementById(id);
   }
   el['dialog-next'].addEventListener('click', () => { hideDialog(); if (hooks && hooks.onDialog) hooks.onDialog(); });
@@ -102,6 +121,17 @@ export function updateHUD(weaponSnap) {
     lastWeapon = wtxt;
     el['hud-weapon'].textContent = wtxt;
   }
+  // fade the combat feedback overlays (damage flash ~0.55 s, hit ~0.22 s)
+  const now = performance.now();
+  if (el['dmg-vignette']) {
+    const k = Math.max(0, 1 - (now - dmgAt) / 550);
+    el['dmg-vignette'].style.opacity = (k * 0.85).toFixed(3);
+    if (el['dmg-dir']) el['dmg-dir'].style.opacity = (k * 0.95).toFixed(3);
+  }
+  if (el['hitmarker']) {
+    const k = Math.max(0, 1 - (now - hitAt) / 220);
+    el['hitmarker'].style.opacity = k.toFixed(3);
+  }
   drawMinimap();
 }
 
@@ -124,13 +154,13 @@ function drawMinimap() {
   g.clearRect(0, 0, size, size);
   g.save();
   g.beginPath(); g.arc(half, half, half - 1, 0, Math.PI * 2); g.clip();
-  g.fillStyle = '#79a85b'; g.fillRect(0, 0, size, size);
+  g.fillStyle = '#8a8f66'; g.fillRect(0, 0, size, size);
   // sea band (world north, z high)
   const seaY = half - (148 - pz) * scale;
-  g.fillStyle = '#1d7fa8'; g.fillRect(0, 0, size, Math.max(0, seaY + 26 * scale));
+  g.fillStyle = '#14607e'; g.fillRect(0, 0, size, Math.max(0, seaY + 26 * scale));
   g.fillStyle = '#e6cf9a'; g.fillRect(0, Math.max(0, seaY), size, 26 * scale);
   // roads
-  g.strokeStyle = '#3c4147'; g.lineWidth = Math.max(2, 13 * scale);
+  g.strokeStyle = '#2e3237'; g.lineWidth = Math.max(2, 13 * scale);
   for (const r of [-120, -80, -40, 0, 40, 80, 120]) {
     const vx = half + (r - px) * scale;
     g.beginPath(); g.moveTo(vx, 0); g.lineTo(vx, size); g.stroke();
@@ -138,7 +168,7 @@ function drawMinimap() {
     g.beginPath(); g.moveTo(0, hz); g.lineTo(size, hz); g.stroke();
   }
   // buildings as warm blocks
-  g.fillStyle = '#c9973f';
+  g.fillStyle = '#c97e3f';
   for (const b of S.colliders) {
     const bx = half + ((b.minX + b.maxX) / 2 - px) * scale;
     const bz = half - ((b.minZ + b.maxZ) / 2 - pz) * scale;

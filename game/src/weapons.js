@@ -6,6 +6,7 @@ import { S, CFG, dist2d } from './config.js';
 import { damageNPC, scareArea } from './population.js';
 import { reportCrime } from './wanted.js';
 import { sfx } from './audio.js';
+import { showHitMarker } from './hud.js';
 
 export const WPN = {
   owned: { fists: true, baton: false, pistol: false },
@@ -98,6 +99,7 @@ export function meleeAttack(kind) {
   scareArea(S.p.x, S.p.z, 5);
   if (target) {
     const result = damageNPC(target, dmg);
+    if (result !== 'immune') showHitMarker();
     if (result !== 'immune' && result !== 'fled') {
       reportCrime(S.p.x, S.p.z, target);
     }
@@ -134,7 +136,7 @@ export function shoot() {
   const target = frontTarget(34, 0.32);
   if (target) {
     const result = damageNPC(target, CFG.bulletDamage);
-    if (result !== 'immune') reportCrime(S.p.x, S.p.z, target);
+    if (result !== 'immune') { showHitMarker(); reportCrime(S.p.x, S.p.z, target); }
     if (result === 'down' && target.kind === 'thug' && target.armed) {
       spawnDrop('pistol', target.x, target.z);
     }

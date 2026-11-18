@@ -1,7 +1,9 @@
-// PURNAMA BAY - touch controls for phones held in landscape: an analogue
-// joystick bottom-left and big thumb buttons bottom-right (every button at
-// least 56 px, most are 64). Mouse input drives the same state on desktop
-// so the layout can be tested without a phone.
+// PURNAMA BAY - touch controls for phones held in landscape: a slim
+// analogue joystick bottom-left and thumb buttons bottom-right sized
+// 48-54 px (see index.html), plus camera drag: a finger dragged over the
+// right half of the open game view orbits the camera, and a mouse drag
+// on the canvas does the same on desktop. Mouse input also drives the
+// stick on desktop so the layout can be tested without a phone.
 import { S } from './config.js';
 
 export function isTouchCapable() {
@@ -10,7 +12,9 @@ export function isTouchCapable() {
 
 let joyId = null;
 let joyCenter = { x: 0, y: 0 };
-const RADIUS = 44;
+// stick travel in px: matches the slimmed 96 px base / 44 px knob, and a
+// drag past the base edge still clamps to full deflection
+const RADIUS = 28;
 
 function setKnob(dx, dy) {
   const knob = document.getElementById('joy-knob');
@@ -76,6 +80,57 @@ export function initTouch(hooks) {
     window.addEventListener('mousemove', (e) => { if (mouseDown) joyPoint(e); });
     window.addEventListener('mouseup', () => { if (mouseDown) { mouseDown = false; setKnob(0, 0); S.input.joyActive = false; } });
   }
+  // ---- camera drag: orbit with a finger on the open right half of the
+  // screen, or with the mouse on the canvas. Touches that START on the
+  // joystick, a button or any panel never rotate the camera, and button
+  // taps keep working because those touches are claimed elsewhere.
+  const isUiTarget = (t) => !!(t && t.closest
+    && t.closest('#joy-base, .tbtn, button, #dialog, #shop, #menu, #end-overlay, #rotate-overlay'));
+  let camTouchId = null;
+  let camLast = { x: 0, y: 0 };
+  window.addEventListener('touchstart', (e) => {
+    for (const t of e.changedTouches) {
+      if (camTouchId !== null) continue;
+      if (isUiTarget(e.target)) continue;
+      if (t.clientX < window.innerWidth * 0.5) continue; // right half only
+      camTouchId = t.identifier;
+      camLast = { x: t.clientX, y: t.clientY };
+    }
+  }, { passive: true });
+  window.addEventListener('touchmove', (e) => {
+    if (camTouchId === null) return;
+    for (const t of e.changedTouches) {
+      if (t.identifier !== camTouchId) continue;
+      const dx = t.clientX - camLast.x;
+      const dy = t.clientY - camLast.y;
+      camLast = { x: t.clientX, y: t.clientY };
+      if ((dx || dy) && hooks && hooks.onCamDrag) hooks.onCamDrag(dx, dy);
+    }
+  }, { passive: true });
+  const endCam = (e) => {
+    for (const t of e.changedTouches) if (t.identifier === camTouchId) camTouchId = null;
+  };
+  window.addEventListener('touchend', endCam);
+  window.addEventListener('touchcancel', endCam);
+  // desktop: drag the game canvas itself (clicks still fire via main.js)
+  const sceneEl = document.getElementById('scene');
+  if (sceneEl) {
+    let camMouse = false;
+    sceneEl.addEventListener('mousedown', (e) => {
+      if (e.button !== 0 || !e.target || e.target.tagName !== 'CANVAS') return;
+      camMouse = true;
+      camLast = { x: e.clientX, y: e.clientY };
+    });
+    window.addEventListener('mousemove', (e) => {
+      if (!camMouse) return;
+      const dx = e.clientX - camLast.x;
+      const dy = e.clientY - camLast.y;
+      camLast = { x: e.clientX, y: e.clientY };
+      if ((dx || dy) && hooks && hooks.onCamDrag) hooks.onCamDrag(dx, dy);
+    });
+    window.addEventListener('mouseup', () => { camMouse = false; });
+  }
+
   bindButton('btn-act', () => { if (hooks && hooks.onAct) hooks.onAct(); });
   bindButton('btn-jump', () => { if (hooks && hooks.onJump) hooks.onJump(); });
   bindButton('btn-hit', () => { if (hooks && hooks.onHit) hooks.onHit(); });
